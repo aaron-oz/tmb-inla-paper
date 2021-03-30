@@ -1,0 +1,2686 @@
+% Created 2020-11-23 Mon 16:57
+% Intended LaTeX compiler: pdflatex
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{grffile}
+\usepackage{longtable}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{amsmath}
+\usepackage{textcomp}
+\usepackage{amssymb}
+\usepackage{capt-of}
+\usepackage{hyperref}
+\usepackage{minted}
+\usepackage{amsmath}
+\usepackage[fontsize=4pt]{minted}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{parskip}
+\usepackage{dsfont}
+\setcounter{secnumdepth}{4}
+\author{Aaron Osgood-Zimmerman}
+\date{\today}
+\title{Simulating and fitting the BYM2 Model}
+\hypersetup{
+ pdfauthor={Aaron Osgood-Zimmerman},
+ pdftitle={Simulating and fitting the BYM2 Model},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={Emacs 27.1 (Org mode 9.3)}, 
+ pdflang={English}}
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+
+\section{Overview}
+\label{sec:org60efa9e}
+This file discusses and simulates a BYM2 model over Nigeria using
+previously prepped Nigeria objects.
+
+\subsection{Notes:}
+\label{sec:org0a03d6a}
+\begin{enumerate}
+\item These notes are heavily taken from the Riebler et al 2016 paper:
+\emph{An intuitive Bayesian spatial model for disease mapping that
+accounts for scaling}. Many of the '' `facts`'' cited in these
+notes have references that in that paper (and that should be
+added here\ldots{})
+\item I lazily use \(\cdot^{-1}\) to indicate generalized inverses
+throughout
+\end{enumerate}
+
+
+\section{The BYM2 model}
+\label{sec:org7d4442e}
+\subsection{{\bfseries\sffamily TODO} ICAR review}
+\label{sec:org10ed328}
+
+
+\subsection{{\bfseries\sffamily TODO} (SEE LOG) BYM2 motivation and overview}
+\label{sec:org019f4ae}
+The BYM2 model attempts to address a few outstanding issues with
+previous ICAR models
+
+\begin{enumerate}
+\item In the classic BYM model, the regional spatial effect
+\(\boldsymbol b\) are decomposed into a sum of an unstructured and
+a structured component s.t. \(\boldsymbol b = \boldsymbol v +
+      \boldsymbol u\). The resulting variance is
+
+$$
+      \text{var}\left( \mathbf b | \tau_u, \tau_v \right) =  \tau_v^{-1}\mathbf I + \tau_u^{-1}\mathbf Q^{-1}
+      $$
+
+but since the structured and unstructured components cannot be
+observed independently from one another, they are not
+identifiable. A second difficulty with this model is that,
+\(\tau_v^{-1}\) and \(\tau_u^{-1}\) represent different scales of
+variability with
+
+\begin{itemize}
+\item \(\tau_v^{-1}\) interpreted as the \textbf{marginal} variance of the
+unstructured random effects, and
+\item \(\tau_u^{-1}\) interpreted as controlling the variability of the
+structured components, \(u_i\), \textbf{conditional} on the effects in
+its neighboring areas.
+\end{itemize}
+
+Others (Leroux and Dean) have attempted to address this by
+reparameterizing into one parameter that controls the total
+variance, and a second that controls the decomposition of the
+total variance into structured and unstructured components. But,
+these models do not solve the second issue of scaling.
+
+\item The second issue with previous ICARs (and, more generally, all
+IGMRFs) models (BYM, Leroux, and Dean) is that of scaling of the
+structured variance component. Scaling is crucial in the
+assignment of hyperpriors within and across models. From Riebler:
+"the Besag model is an intrinsic GMRF which penalizes local
+deviation from its null space: constant level in the case of one
+connected component. The hyperprior controls the local deviation
+and thus influences the smoothness of the spatial effect
+estimates. If the estimated field is too smooth, the precision is
+large and potential spatial variation might be blurred. OTOH, if
+precision is too small the model might overfit due to large local
+variability." In general, the marginal variances for regions,
+\(\tau_b^{-1}[\boldsymbol Q^{-1}_{ii}]\) depend on the graph
+structure encoded in \(\boldsymbol Q\). They demonstrate this by
+noting that the generalized variance, computed as the geometric
+mean of the marginal variances (though they could have used any
+other 'typical value') can be different for two different graph
+structures, even if the graphs have the same number of regions
+\end{enumerate}
+
+\begin{align}
+\sigma_{GV}^2(\boldsymbol u) &= \text{exp}\left( \frac{1}{n_{s}}\sum_{i=1}^{n_s}\text{log}\left( \frac{1}{\tau_{b}}[\boldsymbol Q^{-1}]_{ii} \right) \right) \nonumber\\
+&=  \frac{1}{\tau_{b}}\text{exp}\left( \frac{1}{n_{s}}\sum_{i=1}^{n_s}\text{log}\left([\boldsymbol Q^{-1}]_{ii} \right) \right) \label{eq:gv}
+\end{align}
+
+The total (combined structured and unstructured) random effects
+component for the BYM2 model is written as:
+
+$$ \theta + \phi = \sigma\left(\sqrt{1 - \rho\theta^\star} + \sqrt{\rho}\phi^\star\right) $$
+
+where
+
+\begin{itemize}
+\item \(\sigma \geq 0\) is the \uline{overall} standard deviation
+\item \(\rho \in \left[0, 1\right]\) models how much of the total variance
+is spatially structured (instead of unstructured)
+\item \(\theta^\star \sim N(0, \boldsymbol I)\) is the unstructured iid
+random effect with with standard dev 1
+\item \(\phi^\star\) is the ICAR model scaled such that \(\text{Var}(\phi_i)\approx 1\)
+\end{itemize}
+
+In order for \(\sigma\) to be the stdev of the random effect, we need
+\(\text{Var}(\theta_i)\approx\text{Var}(\phi_i)\approx 1\) \uline{for each}
+\(i\). This is usually not the case with (unscaled) ICAR models and
+Riebler et al (2016) suggest a scaling where the geometric mean of
+these variances is 1 - which is arbitrary but about the best we can
+do for now. Based on Eq. \ref{eq:gv}, they suggest to
+multiplicatively scale the ICAR precision matrix by
+
+\begin{align}
+\text{exp}\left(\frac{1}{n_s}\sum_{i=1}^{n_s}\text{log}\left([\boldsymbol Q^{-1}]_{ii}\right)\right) \label{eq:sf}
+\end{align}
+
+We can get this scaling calculation free from INLA using \({\tt
+   inla.scale.model()}\), or calculate it ourselves.\\
+
+We can now set priors more sensibly. Reibler suggests:
+
+\begin{itemize}
+\item A standard prior on the standard deviation such as a half-normal,
+a half-t or an exponential.
+\item A beta(1/2,1/2) prior on \(\phi\)
+
+All said, this results in the following model:
+\end{itemize}
+
+\begin{align}
+\boldsymbol b &= \frac{1}{\sqrt{\tau_b}}\left( \sqrt{1-\phi}\boldsymbol v + \sqrt{\phi}\boldsymbol u_{\star} \right) \\
+\text{with covariance} \nonumber \\
+\text{var}\left( \boldsymbol b | \tau_b,\phi \right) &= \tau_{b^{-1}}\left( (1-\phi)\boldsymbol I +\phi\boldsymbol Q_{\star}^{-1} \right) \label{eq:bym2.var}
+\end{align}
+
+where
+
+\begin{itemize}
+\item \(\boldsymbol u^{\star}\) is the \uline{scaled} spatially structured component, and
+\item \(\boldsymbol Q_{\star}^{-1}\) is the standard precision for an BYM ICAR model, scaled according to Eq. \ref{eq:sf}
+\end{itemize}
+
+
+\subsection{Maintaining sparsity in BYM2 precision}
+\label{sec:orgab07510}
+Finally, in \(\S 3.4\), Riebler moves to a final reparameterization
+that preserves sparsity of the precision. since
+Eq. \ref{eq:bym2.var} involves the generalized inverse of
+\(\boldsymbol Q_{star}\), that parameterization results in a
+non-sparse precision matrix. \\
+
+Given
+
+\begin{itemize}
+\item \(\mathbf{u}_{\star}\sim N(0, \mathbf{Q}_{\star^{-1}})\) with \(\mathbf{Q}_{\star^{-1}\) scaled
+\item \(\mathbf{v}\sim N(0, \mathbf{I})\),
+\item \(\mathbf{b} = \mathbf{v} + \mathbf{u}_{\star}\)
+\end{itemize}
+
+let
+
+\begin{itemize}
+\item \(\mathbf{w} = \left( \mathbf{w}_1^t, \mathbf{w}_2^t \right)^t\), with
+\item \(\mathbf{w}_1 = \mathbf{b}\)
+\item \(\mathbf{w}_2 = \mathbf{u}_{\star}\),
+\end{itemize}
+
+we have
+
+$$
+   \mathbf{w}_1|\mathbf{w}_2 \sim N\left( \sqrt{\frac{\phi}{\tau_b}}\mathbf{w}_2, \frac{1-\phi}{\tau_b}\mathbf{I} \right)
+   $$
+
+and with \(\pi(\mathbf{w}) = \pi(\mathbf{w}_1|\mathbf{w}_2)\pi(\mathbf{w}_2)\), we get
+
+\begin{align}
+\mathbf{w}\sim N \left( \mathbf{0},
+\left( \begin{array}[tb]{cc}
+\frac{\tau_b}{1-\phi}\mathbf{I}                 & -\frac{\sqrt{\phi\tau_{b}}}{1-\phi}\mathbf{I} \\
+ -\frac{\sqrt{\phi\tau_{b}}}{1-\phi}\mathbf{I}  & \mathbf{Q}_{\star} + \frac{\phi}{1-\phi}\mathbf{I}
+\end{array}
+\right)^{-1}\right) \label{eq:bym2.sparse}
+\end{align}
+
+where the marginal of \(\mathbf{w}_1\) has the correct distribution,
+the structured component is given by the second half of
+\(\mathbf{w}\), namely \(\mathbf{w}_{2}\), and sparsity is maintained
+in the precision!
+
+
+\section{Simulation of a BYM2 model}
+\label{sec:orgc5432d4}
+Now, let's simulate one of these from the ground up.
+
+\subsection{Start R session}
+\label{sec:org03fab15}
+First we load the previously prepared objects.
+
+\begin{minted}[]{r}
+   # load pkgs
+   require(INLA)
+   require(TMB)
+   require(raster)
+   require(sf)
+   require(tmap); tmap_options(show.messages = F)
+   require(data.table)
+   require(glue)
+   require(scales)
+
+   # set nigeria data dir
+   nga.data.dir <- '/home/merms/Documents/Research/2020_tmb_v_inla/nigeria_objects/'
+
+   # load prepped nigera data
+   load(file.path(nga.data.dir, "prepped_discrete_obj.RData"))
+\end{minted}
+
+\begin{center}
+\begin{tabular}{l}
+nga1\\
+nga1.ras\\
+nga1.adj\\
+W.nga1\\
+W.nga1.rs\\
+\end{tabular}
+\end{center}
+
+Here is a plot of the administrative level 1 boundaries for
+Nigeria. We will use these as our spatial areas.
+
+\begin{minted}[]{r}
+   # convert to sf obj
+   nga1 <- st_as_sf(nga1)
+
+   # make NGA border
+   nga.border <- sf::st_union(nga1)
+
+   # look at available tmap color palettes
+   # tmaptools::palette_explorer()
+
+   # plot the admin units
+   tm_shape(nga1) +
+     tm_polygons(col = "gray60", border.col = "white") +
+     tm_shape(nga.border) +
+     tm_borders(col = "black", lwd = 2) +
+     tm_layout(title = "Spatial Domain: Admin 1 Units of Nigeria",
+               title.size = 1.2,
+               title.position = c("center", "top")) +
+     tm_layout(inner.margins = c(0.02, 0.02, 0.1, 0.02))
+
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/nga_adm1.png}
+\end{center}
+
+
+\subsection{Neighborhood structure}
+\label{sec:org73e920f}
+To actually build up a BYM model, we start by encoding the
+neighborhood structure, we establish the adjacency matrix for our
+spatial domain, the unscaled precision matrix \(\boldsymbol Q^{u}\)
+and the scaled precision, \(\boldsymbol Q\). For two areas \(i\) and
+\(j\), we define them to be neighbors if they share a border and we
+denote this \(i\sim j\). The set of neighbors for area \(i\) will be
+denoted \(\delta_i\) and the number of neighbors will be
+\(n_{\delta_i}\). \(\boldsymbol Q^{u}\) is then constructed as:
+
+\begin{align*}
+{\boldsymbol Q^{u}_{i,j}} =
+\begin{cases}
+    n_{\delta_{i}},& \text{if } i =  j\\
+    -1           ,& \text{if } j\in\delta_i\\
+    0            ,& \text{otherwise}
+\end{cases}
+\end{align*}
+
+\subsubsection{Constructing and scaling the structured ICAR precision}
+\label{sec:orgaf18f46}
+\begin{minted}[]{r}
+    ## start with a prepared adjacency matrix encoding neighbors, ie
+    ## $i ~ j$ in matrix form
+    adj.mat <- W.nga1
+
+    ## build the unscaled ICAR precision for BYM model
+    ## NOTE: that the diag(adj.mat) is all 0s
+    ## NOTE: this is singular!
+    Q.u <- Diagonal(n = nrow(adj.mat), x = rowSums(adj.mat)) - adj.mat
+
+    ## add a small jitter to the diagonal for numerical stability (and invertibility)
+    ## not necessary, but recommended
+    Q.u <- Q.u + Diagonal(nrow(adj.mat)) * max(diag(Q.u)) * sqrt(.Machine$double.eps)
+
+    ## and then we can find the scaling factor both by hand' and using an
+    ## inla helper function
+
+    ## by hand
+
+    # Compute the diagonal elements of the covariance matrix subject to
+    # the constraint that the entries of the ICAR sum to zero.  inla.qinv
+    # function documentation has more detail
+    Q.u.inv <- inla.qinv(Q.u, constr=list(A = matrix(1, nrow = 1, ncol = ncol(Q.u)), e=0))
+
+    # Compute the geometric mean of the variances, which are on the
+    # diagonal of Q.inv
+    scaling_factor <- exp(mean(log(diag(Q.u.inv))))
+    glue('scaling factor is: {scaling_factor}')
+
+    ## with INLA helper function
+    Q <- inla.scale.model(Q.u,
+                          constr=list(A=matrix(1, nrow=1, ncol=ncol(Q.u)), e=0))
+
+    message('diagonal of (scaled) Q^{-1} is:')
+    print(diag(INLA:::inla.ginv(Q)))
+
+    ## and to check
+    message('diagonal of (unscaled) Q.u^{-1} is:')
+    print(diag(INLA:::inla.ginv(Q.u)))
+
+    ## and if we divide by the scaling factor
+    message('diagonal of (hand-scaled) (Q.u/scaling_factor)^{-1} is:')
+    print(diag(INLA:::inla.ginv(Q.u * scaling_factor)))
+\end{minted}
+
+\begin{verbatim}
+
+    scaling factor is: 0.396716014311755
+
+    diagonal of (scaled) Q^{-1} is:
+
+     [1] 0.7777767 1.5660364 1.3620512 0.6596879 0.7579438 1.8587773 0.5740678
+     [8] 1.7015597 1.0616634 0.8975925 1.0042079 0.8871279 0.9503734 0.7472922
+    [15] 0.7713842 1.1415459 1.3141749 1.1686779 0.5525822 1.0914678 1.0673169
+    [22] 1.5200973 0.3433191 0.7992471 3.7988249 0.5555558 0.6080457 1.4143842
+    [29] 0.7169825 1.0136567 1.4682399 0.9046792 0.9034372 2.1488188 0.7149954
+    [36] 1.2781608 0.9755673
+
+    diagonal of (unscaled) Q.u^{-1} is:
+
+     [1] 0.3085564 0.6212716 0.5403474 0.2617087 0.3006884 0.7374066 0.2277418
+     [8] 0.6750358 0.4211788 0.3560892 0.3983853 0.3519378 0.3770283 0.2964627
+    [15] 0.3060204 0.4528695 0.5213541 0.4636331 0.2192182 0.4330027 0.4234216
+    [22] 0.6030468 0.1362001 0.3170741 1.5070544 0.2203979 0.2412214 0.5611087
+    [29] 0.2844384 0.4021338 0.5824742 0.3589006 0.3584079 0.8524707 0.2836501
+    [36] 0.5070667 0.3870231
+
+    diagonal of (hand-scaled) (Q.u/scaling_factor)^{-1} is:
+
+     [1] 0.7777766 1.5660361 1.3620509 0.6596877 0.7579437 1.8587769 0.5740677
+     [8] 1.7015593 1.0616632 0.8975923 1.0042077 0.8871277 0.9503732 0.7472921
+    [15] 0.7713840 1.1415457 1.3141747 1.1686777 0.5525821 1.0914676 1.0673167
+    [22] 1.5200970 0.3433190 0.7992470 3.7988242 0.5555557 0.6080455 1.4143839
+    [29] 0.7169823 1.0136565 1.4682396 0.9046790 0.9034370 2.1488184 0.7149953
+    [36] 1.2781605 0.9755671
+\end{verbatim}
+
+
+\subsection{Simulation of the BYM2 from the ground up}
+\label{sec:orgbad1599}
+\subsubsection{Simulating the hyperparameters, \(\phi\) and \(\sigma\):}
+\label{sec:org7e3b449}
+\begin{minted}[]{r}
+
+    ## set.seed(413)
+
+    alpha <- -3
+
+    phi <- 0.85
+    sigma <- 0.2
+
+    # random?
+    phi <- rbeta(n = 1, shape1 = 0.5, shape2 = 0.5)
+    sigma <- rexp(n = 1)
+
+    tau <- 1 / sigma
+
+    glue('alpha (int) is: {alpha}')
+    glue('phi is: {phi}')
+    glue('sigma is: {sigma}')
+    glue('tau is: {tau}')
+\end{minted}
+
+
+\subsubsection{Simulating the field}
+\label{sec:org8bc4e96}
+\paragraph{Constructing the precision matrices}
+\label{sec:org63cdc21}
+Using the parameterization in Eq. \ref{eq:bym2.sparse}
+
+\subparagraph*{Function to make scaled precision for BYM2 structured component}
+\label{sec:org04fe2e1}
+\begin{minted}[]{r}
+
+      ## Create the scaled precision of the structured component of the BYM2 model
+      #
+      # adj.mat: matrix defining neighbors
+      #          NOTE: that the diag(adj.mat) is all 0s
+      # sparse.mat: LOGICAL. if T, return sparse matrix object
+      #
+      # returns matrix of the scaled precision of the structured portion of the BYM2 model
+      make_BYM2_struct_scaled_prec <- function(adj.mat,
+                                               sparse.mat = TRUE){
+
+        if(sparse.mat){
+          # first, make the unscaled ICAR precision
+          # NOTE: this is singular!
+          Q.u <- Diagonal(n = nrow(adj.mat), x = rowSums(adj.mat)) - adj.mat
+
+          # add a small jitter to the diagonal for numerical stability (and invertibility)
+          # not necessary, but recommended
+          Q.u <- Q.u + Diagonal(nrow(adj.mat)) * max(diag(Q.u)) * sqrt(.Machine$double.eps)
+        }else{
+          # first, make the unscaled ICAR precision
+          # NOTE: this is singular!
+          Q.u <- diag(nrow = nrow(adj.mat),
+                      ncol = nrow(adj.mat), x = rowSums(adj.mat)) - adj.mat
+
+          # add a small jitter to the diagonal for numerical stability (and invertibility)
+          # not necessary, but recommended
+          Q.u <- Q.u + diag(nrow = nrow(adj.mat),
+                            ncol = nrow(adj.mat),
+                            x = 1) * max(diag(Q.u)) * sqrt(.Machine$double.eps)
+        }
+
+        ## # Compute the geometric mean of the variances, which are on the
+        ## # diagonal of Q.inv
+        ## scaling_factor <- exp(mean(log(diag(Q.u.inv))))
+
+        ## # and scale
+        ## Q.s <- Q.u / scaling_factor
+
+        Q.s <- inla.scale.model(Q.u,
+                                constr = list(A = matrix(1, nrow = 1, ncol = ncol(Q.u)), e = 0))
+
+        # for some reason, the Matrix pkg doesn't always think this is
+        # symmetric (even though all ij entries equal ji entries as far as I
+        # can tell), so we force symmetry
+
+        if(!isSymmetric(Q.s)){
+          Q.s <- forceSymmetric(Q.s)
+        }
+
+        return(Q.s)
+      }
+\end{minted}
+
+
+\subparagraph*{Function to make joint precision for total and structured components - maintaining sparsity}
+\label{sec:org90b4c38}
+\begin{minted}[]{r}
+
+      ## Calculate and return the precision matrix for a (scaled) BYM2 model
+      #
+      # adj.mat: adjacency matrix
+      # phi: proportion of total var that is structured
+      # tau: total precision of struct + unstruct
+      # sparse.mat: LOGICAL. if T, return sparse matrix object
+      #
+      # returns the (sparse) precision matrix for w = (w1, w2)
+      # w1 = total effect
+      # w2 = scaled structured effect
+      make_BYM2_joint_unstruct_scaled_struc_prec_mat <- function(adj.mat,
+                                                                 phi,
+                                                                 tau,
+                                                                 sparse.mat = TRUE
+                                                                 ){
+
+        # get the number of regions
+        n <- nrow(adj.mat)
+
+        # first, make the scaled precision matrix of the structured component
+        Q.s <- make_BYM2_struct_scaled_prec(adj.mat = adj.mat, sparse.mat = sparse.mat)
+
+        ## we make the joint prec (unstruct + struct) and then populate the
+        ## 4 (2x2) blocks of the matrix
+
+        if (sparse.mat) {
+          # joint mat
+          prec.mat <- Matrix(0, nrow = 2 * n, ncol = 2 * n)
+
+          # blocks
+          block11 <- diag(ncol = n, nrow = n, x = tau / (1 - phi))
+          block12 <- diag(ncol = n, nrow = n, x = -sqrt(phi * tau) / (1 - phi))
+          # block21 == block12
+          block22 <- Q.s + diag(ncol = n, nrow = n, x = phi / (1 - phi))
+        }else{
+
+          # joint mat
+          prec.mat <- matrix(0, nrow = 2 * n, ncol = 2 * n)
+
+          # blocks
+          block11 <- Diagonal(n = n, x = tau / (1 - phi))
+          block12 <- Diagonal(n = n, x = -sqrt(phi * tau) / (1 - phi))
+          # block21 == block12
+          block22 <- Q.s + Diagonal(n = n, x = phi / (1 - phi))
+        }
+
+        # populate
+        prec.mat[1:n, 1:n] <- block11
+        prec.mat[1:n, (n + 1):(2 * n)] <- block12
+        prec.mat[(n + 1):(2 * n), 1:n] <- block12
+        prec.mat[(n + 1):(2 * n), (n + 1):(2 * n)] <- block22
+
+        return(prec.mat)
+      }
+\end{minted}
+
+
+\subparagraph*{Function to simulate (constrained by sum - to - zero) multivar Gaussian given a sparse precision}
+\label{sec:org4dbefa4}
+\begin{minted}[]{r}
+      ## Simulate a multivar norm given a precision mat
+      #
+      # mu: mean vec
+      # prec: precision matrix
+      # n.sims: numer of draws
+      # sumtozero: logical, if T, modify draws to sum-to-zero
+
+      # returns a matrix of draws (columns) across the dimension of the RV (rows)
+      rmvnorm_prec <- function(mu, prec, n.sims, sumtozero = FALSE) {
+
+        if(length(mu) == 1){
+          mu <- rep(mu, nrow(prec))
+        }
+
+        z <- matrix(rnorm(length(mu) * n.sims), ncol=n.sims)
+        L <- Matrix::Cholesky(prec, super=TRUE)
+        z <- Matrix::solve(L, z, system = "Lt") ## z = Lt^-1 %*% z
+        z <- Matrix::solve(L, z, system = "Pt") ## z = Pt    %*% z
+        z <- as.matrix(z)
+        x <- mu + z
+
+        if(!sumtozero){
+
+          return(x)
+
+        }else{
+
+          # we need to adjust each draw to constrain it
+          # (efficiently) make some relevant objects
+          A <- rep(1, nrow(prec))
+          Qinv.A <- solve(prec, A)
+
+          # this is how we do it for 1 draw
+          app.constr <- function(x){
+            x - Qinv.A %*% ((A %*%Qinv.A) ^ (-1)) %*% (A %*% x - 0)
+          }
+
+          if(n.sims == 1){
+            x.c <- app.constr(x)
+          }else{
+            x.c <- do.call("cbind", apply(x, 2, app.constr))
+          }
+
+          return(x.c)
+
+        } # else(!sumtozero)
+
+      }
+\end{minted}
+
+
+\subparagraph*{Simulating the unconstrained structured ICAR field}
+\label{sec:org509e151}
+\begin{minted}[]{r}
+      # first, just the structured part (to test)
+      bym2.scaled.prec <- make_BYM2_struct_scaled_prec(adj.mat,
+                                                       sparse.mat = TRUE)
+
+      bym2.sims <- rmvnorm_prec(mu = 0,
+                                prec = bym2.scaled.prec,
+                                n.sims = 4)
+
+      nga1$unconstr_struct_sim1 <- bym2.sims[, 1]
+      nga1$unconstr_struct_sim2 <- bym2.sims[, 2]
+      nga1$unconstr_struct_sim3 <- bym2.sims[, 3]
+      nga1$unconstr_struct_sim4 <- bym2.sims[, 4]
+
+      sim.plot1 <- tm_shape(nga1) +
+        tm_polygons("unconstr_struct_sim1", style = "quantile")
+      sim.plot2 <- tm_shape(nga1) +
+        tm_polygons("unconstr_struct_sim2", style = "quantile")
+      sim.plot3 <- tm_shape(nga1) +
+        tm_polygons("unconstr_struct_sim3", style = "quantile")
+      sim.plot4 <- tm_shape(nga1) +
+        tm_polygons("unconstr_struct_sim4", style = "quantile")
+
+      tmap_arrange(sim.plot1,
+                   sim.plot2,
+                   sim.plot3,
+                   sim.plot4, ncol = 2)
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/unstable_struct_bym2.png}
+\end{center}
+
+
+\paragraph{Sampling from a GMRF Conditioned on Linear Constraints}
+\label{sec:org9843fe0}
+As seen, we still have one problem left to solve.
+
+The ICAR model is improper and this results in an unstable mean
+when sampling from the precision. Thus, while the structured
+pattern across space seems fine, the overall mean level is highly
+unstable.\\
+
+From \emph{The Handbook of Spatial Statistics}, \(\S 12.1.7.4\), we
+know how to sample from a (linearly) constrained GMRF: \\
+
+Given a sample from a GMRF, \(\mathbf{x}\) that needs to be sampled under linear constraint
+
+$$
+     \mathbf{A}\mathbf{x} = \mathbf{e},
+     $$
+
+
+and assuming constraint matrix \(\mathbf{A}\) is of dimension
+\(k\times n\) and is of rank \(k\), we have a few options.
+
+\begin{enumerate}
+\item We could compute the conditional Gaussian density of
+\(\pi(\mathbf{x}|\mathbf{A}\mathbf{x} = \mathbf{e})\), but the
+precision of this is usually not sparse. For example, if \(x_i\)
+and \(x_j\) are conditionally independent given the remainder of
+the field, then under the sum-to-zero constraint they will be
+negatively correlated and the corresponding entry in the
+precision matrix will be non-zero.
+\item Alternatively, we could correct an unconstrained sample,
+\(\mathbf{x}\) to make it constrained \(\mathbf{x}^{c}\):
+\end{enumerate}
+
+\begin{equation}
+\mathbf{x}^c = \mathbf{x} - \mathbf{Q}^{-1}\mathbf{A}^T\left( \mathbf{A}\mathbf{Q}^{-1}\mathbf{A}^T \right)^{-1}\left( \mathbf{A}\mathbf{x}-\mathbf{e} \right) \label{eq:cosntr.gmrf.corr}
+\end{equation}
+
+This is actually relatively cheap to compute since
+\(\mathbf{Q}^{-1}\mathbf{A}^T\) is only solving \(k\) linear systems of
+the form \(\mathbf{Q}\mathbf{v}_j = (\mathbf{A}^T)_{j}\) for \(j = 1,
+     \ldots, k\), and \(\mathbf{A}\mathbf{Q}^{-1}\mathbf{A}^T\) is a
+\(k\times k\) matrix and we can (usually) quickly calculate its
+Cholesky decomposition is \(k\) is (usually) small. As the book
+section notes, the extra cost of the \(k\) constraints is
+\(\mathcal{O}(nk^2)\).\\
+
+There is one last consideration here, which is the evaluation of
+the constrained log density. This warrants discussion since
+\(\mathbf{x}|\mathbf{A}\mathbf{x}\) is singular with rank \(n-k\). The
+usual solution is to use Bayes' Theorem:
+
+\begin{equation}
+\pi(\mathbf{x}|\mathbf{A}\mathbf{x}) = \frac{\pi(\mathbf{A}\mathbf{x}|\mathbf{x})\pi(\mathbf{x})}{\pi(\mathbf{A}\mathbf{x})} \label{eq:constr.gmrf.density}
+\end{equation}
+
+where
+
+\begin{itemize}
+\item \(\pi(\mathbf{x})\) is a GMRF with mean \(\mu\) and precision \(\mathbf{Q}\),
+\item \(\pi(\mathbf{A}\mathbf{x}|\mathbf{x})\) is a \$k\$-dimensional Gaussian with mean \(\mathbf{A}\mu\) and covariance \(\mathbf{A}\mathbf{Q}^{{-1}}\mathbf{A}^{T}\),
+\item and,
+\end{itemize}
+\begin{equation}
+        \pi(\mathbf{A}\mathbf{x}) =  \begin{cases}
+                                       0, & \text{if } \mathbf{A}\mathbf{x} \not= \mathbf{e}\\
+       |\mathbf{A}\mathbf{A}^{T}|^{-1/2}, & \text{if } \mathbf{A}\mathbf{x} = \mathbf{e}
+                                     \end{cases} \nonumber
+\end{equation}
+
+So, now we can alter our multivar gaussian draw to constrain the
+sample to sum to zero.
+
+\subparagraph*{Simulate a constrained structured ICAR field}
+\label{sec:orgc847f17}
+\begin{minted}[]{r}
+
+      # now we can simulate the constrained structured portion of the BYM2
+
+      bym2.sims <- rmvnorm_prec(mu = 0,
+                                prec = bym2.scaled.prec,
+                                n.sims = 4,
+                                sumtozero = TRUE)
+
+      nga1$sim1 <- bym2.sims[, 1]
+      nga1$sim2 <- bym2.sims[, 2]
+      nga1$sim3 <- bym2.sims[, 3]
+      nga1$sim4 <- bym2.sims[, 4]
+
+      sim.plot1 <- tm_shape(nga1) +
+        tm_polygons("sim1", style = "quantile")
+      sim.plot2 <- tm_shape(nga1) +
+        tm_polygons("sim2", style = "quantile")
+      sim.plot3 <- tm_shape(nga1) +
+        tm_polygons("sim3", style = "quantile")
+      sim.plot4 <- tm_shape(nga1) +
+        tm_polygons("sim4", style = "quantile")
+
+      tmap_arrange(sim.plot1,
+                   sim.plot2,
+                   sim.plot3,
+                   sim.plot4, ncol = 2)
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/stable_struct_bym2.png}
+\end{center}
+
+This now looks like it's zero centered \emph{and} has spatial structure.
+
+The last step is to write a function which simulates the BYM2 with
+sum-to-zero constraints on both the unstructured and structured
+effects.
+
+But first, for comparison, we simulate 4 completely unstructured draws
+for comparison against what comes next.
+
+
+\subparagraph*{Simulate an example of an unstructured field}
+\label{sec:orgd6e6fa8}
+\begin{minted}[]{r}
+
+      # first, truly random (for comparison)
+      nga1$sim1 <- rnorm(n = 37)
+      nga1$sim2 <- rnorm(n = 37)
+      nga1$sim3 <- rnorm(n = 37)
+      nga1$sim4 <- rnorm(n = 37)
+
+      sim.plot1 <- tm_shape(nga1) +
+        tm_polygons("sim1", style = "quantile")
+      sim.plot2 <- tm_shape(nga1) +
+        tm_polygons("sim2", style = "quantile")
+      sim.plot3 <- tm_shape(nga1) +
+        tm_polygons("sim3", style = "quantile")
+      sim.plot4 <- tm_shape(nga1) +
+        tm_polygons("sim4", style = "quantile")
+
+      tmap_arrange(sim.plot1,
+                   sim.plot2,
+                   sim.plot3,
+                   sim.plot4, ncol = 2)
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/rnorm_bym2.png}
+\end{center}
+
+
+\subparagraph*{Function to simulate from joint total + struct - 1 constraint}
+\label{sec:org37f849d}
+Next, I try only imposing the constraint on the structured
+portion, but simulating using the joint \((\mathbf{u} +
+      \mathbf{v}, \mathbf{u})\) specification.
+
+\begin{minted}[]{r}
+
+      ## Simulate a BYM2 RV, sampling simultaneously the total (unstruct +
+      ## struct) and the structured components
+      #
+      # mu: mean vec
+      # prec: joint precision matrix of bym2 (first block is unstructured,
+      #    second block is structured)
+      # n.sims: numer of draws
+      # sumtozero: logical, if T, modify draws to sum-to-zero ONLY the
+      #    structured component
+
+      # returns a matrix of draws (columns) across the dimension of the RV (rows)
+      rbym2_simul_1constr_prec <- function(mu, prec, n.sims, sumtozero = FALSE) {
+
+        if(length(mu) == 1){
+          mu <- rep(mu, nrow(prec))
+        }
+
+        x <- rmvnorm_prec(mu = mu, prec = prec, n.sims = n.sims, sumtozero = sumtozero)
+
+        if(!sumtozero){
+
+          return(x)
+
+        }else{
+
+          # we need to adjust each draw to constrain it s.t.
+          # Ax.c = e
+          # (efficiently) make some relevant objects
+
+          # only applying the sum - to - zero constraint on the second half
+          # of the effects (the structured portion)
+          A <- matrix( rep(0:1, each = nrow(prec) / 2),
+                      nrow = 1, byrow = T)
+          e <- matrix(rep(0, 1), ncol = 1)
+
+          Qinv.A <- Matrix::solve(prec, t(A))
+
+          # this is how we do it for 1 draw
+          app.constr <- function(x){
+            x - Qinv.A %*% ((A %*% Qinv.A) ^ (-1)) %*% (A %*% x - e)
+          }
+
+          if(n.sims == 1){
+            x.c <- app.constr(x)
+          }else{
+            x.c <- do.call("cbind", apply(x, 2, app.constr))
+          }
+
+          return(list(x = x, x.c = x.c))
+
+        } # else(!sumtozero)
+
+      }
+
+\end{minted}
+
+\subparagraph*{Simulate the constrained joint BYM2}
+\label{sec:org0fa7c96}
+\begin{minted}[]{r}
+      # now we make the joint bym2 precision, to take some joint draws
+      bym2.joint.prec <- make_BYM2_joint_unstruct_scaled_struc_prec_mat(adj.mat = adj.mat,
+                                                                        phi = phi,
+                                                                        tau = tau,
+                                                                        sparse.mat = TRUE)
+
+      # and sample under constraints
+      bym2.sims <- rbym2_simul_1constr_prec(mu = 0,
+                                            prec = bym2.joint.prec,
+                                            n.sims = 4,
+                                            sumtozero = TRUE)
+
+      # for these, and all future joint sims, we place the total effect in
+      # the first half of the vector, and the structured component in the
+      # second half
+      total.id <- 1:(nrow(bym2.joint.prec) / 2)
+      struct.id   <- ((nrow(bym2.joint.prec) / 2) + 1):nrow(bym2.joint.prec)
+
+      # pull out the raw (unconstrained) draws to look at them contrasted
+      # against the constrained
+      bym2.sims   <- bym2.sims[['x.c']]
+
+      # check the colMeans of the total and structured parts
+      glue("Here are the means of the total components post-constraining - not actually constrained" )
+      colMeans(bym2.sims[1:37, ])
+
+      glue("Here are the means of the structured components post-constraining - actually constrained")
+      colMeans(bym2.sims[38:74, ])
+\end{minted}
+
+\begin{minted}[]{r}
+      # verify that the constraining hasn't induced correlation by making a
+      # scatter of the unstructured and structured components
+
+      # total <- 1 / sqrt(tau) * (sqrt(1 - phi) * unstruct + sqrt(phi) * struct) !!
+      # unstruct <- (sqrt(tau) * total - sqrt(phi) * struct ) / sqrt(1 - phi)
+
+      total <- bym2.sims[total.id, ]
+      struct <- bym2.sims[struct.id, ]
+      unstruct <- (sqrt(tau) * total - sqrt(phi) * struct) / sqrt(1 - phi)
+
+      par(mfrow = c(2, 2))
+      for(i in 1:4){
+        plot(unstruct[, i], struct[, i],
+             xlab='unstructured', ylab = 'structured',
+             main = glue("correlation is: {cor(unstruct[,i], struct[,i])}"))
+      }
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/unst_str_1constr_scatter.png}
+\end{center}
+
+
+Since these are looking independent, the structured part is
+constrained to sum to zero, we seem to have what we want. Now we
+proceed with this simulation. Note that we could also simulate
+the unstructured and structured portions separately.
+
+\subparagraph*{Plotting constrained and scaled BYM2}
+\label{sec:orgb72386c}
+So, now we plot the unstructured, structured, and total components
+
+\begin{minted}[]{r}
+
+      nga1$unstruct_sim1 <- unstruct[, 1]
+      nga1$unstruct_sim2 <- unstruct[, 2]
+      nga1$unstruct_sim3 <- unstruct[, 3]
+      nga1$unstruct_sim4 <- unstruct[, 4]
+
+      sim.unstruct.plot1 <- tm_shape(nga1) +
+        tm_polygons("unstruct_sim1", style = "quantile")
+      sim.unstruct.plot2 <- tm_shape(nga1) +
+        tm_polygons("unstruct_sim2", style = "quantile")
+      sim.unstruct.plot3 <- tm_shape(nga1) +
+        tm_polygons("unstruct_sim3", style = "quantile")
+      sim.unstruct.plot4 <- tm_shape(nga1) +
+        tm_polygons("unstruct_sim4", style = "quantile")
+
+      nga1$struct_sim1 <- struct[, 1]
+      nga1$struct_sim2 <- struct[, 2]
+      nga1$struct_sim3 <- struct[, 3]
+      nga1$struct_sim4 <- struct[, 4]
+
+      sim.struct.plot1 <- tm_shape(nga1) +
+        tm_polygons("struct_sim1", style = "quantile")
+      sim.struct.plot2 <- tm_shape(nga1) +
+        tm_polygons("struct_sim2", style = "quantile")
+      sim.struct.plot3 <- tm_shape(nga1) +
+        tm_polygons("struct_sim3", style = "quantile")
+      sim.struct.plot4 <- tm_shape(nga1) +
+        tm_polygons("struct_sim4", style = "quantile")
+
+      nga1$total_sim1 <- total[, 1]
+      nga1$total_sim2 <- total[, 2]
+      nga1$total_sim3 <- total[, 3]
+      nga1$total_sim4 <- total[, 4]
+
+      sim.total.plot1 <- tm_shape(nga1) +
+        tm_polygons("total_sim1", style = "quantile", palette = '-Spectral')
+      sim.total.plot2 <- tm_shape(nga1) +
+        tm_polygons("total_sim2", style = "quantile", palette = '-Spectral')
+      sim.total.plot3 <- tm_shape(nga1) +
+        tm_polygons("total_sim3", style = "quantile", palette = '-Spectral')
+      sim.total.plot4 <- tm_shape(nga1) +
+        tm_polygons("total_sim4", style = "quantile", palette = '-Spectral')
+
+      nga1$risk_sim1 <- exp(total[, 1] + alpha)
+      nga1$risk_sim2 <- exp(total[, 2] + alpha)
+      nga1$risk_sim3 <- exp(total[, 3] + alpha)
+      nga1$risk_sim4 <- exp(total[, 4] + alpha)
+
+      sim.risk.plot1 <- tm_shape(nga1) +
+        tm_polygons("risk_sim1", style = "quantile", palette = '-viridis')
+      sim.risk.plot2 <- tm_shape(nga1) +
+        tm_polygons("risk_sim2", style = "quantile", palette = '-viridis')
+      sim.risk.plot3 <- tm_shape(nga1) +
+        tm_polygons("risk_sim3", style = "quantile", palette = '-viridis')
+      sim.risk.plot4 <- tm_shape(nga1) +
+        tm_polygons("risk_sim4", style = "quantile", palette = '-viridis')
+
+
+      tmap_arrange(sim.unstruct.plot1, sim.struct.plot1, sim.total.plot1, sim.risk.plot1,
+                   sim.unstruct.plot2, sim.struct.plot1, sim.total.plot2, sim.risk.plot2,
+                   sim.unstruct.plot3, sim.struct.plot2, sim.total.plot3, sim.risk.plot3,
+                   sim.unstruct.plot4, sim.struct.plot3, sim.total.plot4, sim.risk.plot4,
+                   ncol = 4)
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/final_bym2.png}
+\end{center}
+
+
+\section{Simulating data observations conditional on a field}
+\label{sec:orgeff5b5c}
+Conditional on one of our simulated fields, we can simulate some
+data observations.
+
+\begin{minted}[]{r}
+
+  ## function to simulate data given a population and latent field
+  ## values
+  #
+  # pop: population to observe
+  # int: intercept (added to field before sampling)
+  # field: GMRfield values (latent)
+  # lik: likelihhod for the data. one of:
+  #  "poisson"
+  #  "normal" # TODO
+  #  "binom" # TODO
+  #
+  # returns a data.table with two columns: obs (data) and risk (field)
+
+  sim_field_data <- function(pop, int, field, lik = "poisson"){
+
+    if(lik != "poisson"){
+      stop("only poisson has been implemented")
+    }
+
+    # convert the latent field using the canonical link for the selected
+    # likelihood
+
+    lik.link.dict <- list("poisson" = "exp",
+                          "binom"   = "plogis",
+                          "normal"  = "identity")
+
+    invlink.func <- lik.link.dict[[lik]]
+
+    risk.field <- do.call(invlink.func, list(int + field))
+
+    # simulate data
+
+    if(lik == "poisson"){
+      obs <- rpois(n = length(risk.field), lambda = risk.field * pop)
+    }
+
+    if (lik == "binom") {
+      TODO
+    }
+
+    if (lik == "normal") {
+      TODO
+    }
+
+    return(data.table('obs'=obs, 'risk'=risk.field))
+
+  }
+
+\end{minted}
+
+\subsection{Simulate Poisson data}
+\label{sec:org455e17f}
+\begin{minted}[]{r}
+   nga1$sampled_pop <- nga1$agg_pop / 10000
+
+   obs_risk <- sim_field_data(pop = nga1$sampled_pop,
+                              int = alpha,
+                              field = nga1$total_sim1,
+                              lik = "poisson")
+
+   nga1$poisson_obs <- obs_risk[, obs]
+   nga1$risk1 <- obs_risk[, risk]
+
+   sim.risk1.tm <- tm_shape(nga1) +
+     tm_polygons("risk1", style = "quantile", palette = '-viridis')
+
+   pois.sim1.tm <- tm_shape(nga1) +
+     tm_polygons("poisson_obs", style = "quantile", palette = '-magma')
+
+   nga.pop.tm   <- tm_shape(nga1) +
+     tm_polygons("sampled_pop", style = "quantile", palette = '-cividis')
+
+   tmap_arrange(nga.pop.tm, sim.risk1.tm, pois.sim1.tm, ncol = 3)
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/poisson_data.png}
+\end{center}
+
+
+\section{Fitting of a BYM2 model}
+\label{sec:orge0545f9}
+Now that we have a simulated field and dataset, we can fit it the
+model using different methods (here R-INLA and TMB) and see how well
+it recovers the
+
+\begin{itemize}
+\item unstructured effect
+\item structured effect
+\item \(\phi\)
+\item \(\tau\)
+\end{itemize}
+
+\subsection{Priors in INLA (that we also implement in TMB)}
+\label{sec:org630fc4e}
+This section is taken from \url{https://becarioprecario.bitbucket.io/inla-gitbook/ch-priors.html} \\
+
+The first thing to know about setting priors in INLA is that
+priors are set in the internal representation of the parameter,
+which may be different from the scale of the parameter in the
+model. For example, precisions are represented in the internal
+scale in the log-scale. This is computationally convenient because
+in the internal scale the parameter is not bounded. For example,
+the posterior mode of the hyperparameters can be obtained by
+maximizing the sum of the log-likelihood and the log-prior on the
+hyperparameters. This optimization step is used by INLA at the
+beginning of the model fitting to locate the posterior mode of the
+hyperparameters and find the region of high posterior density. \\
+
+Note that the internal representation of the hyperparameters is
+described in the documentation of the INLA package corresponding to
+the relevant likelihood or latent effect. \\
+
+In order to use one of the prior distributions implemented in INLA
+it is necessary to set them explicitly. Priors on the
+hyperparameters of the likelihood must be passed by defining
+argument \texttt{hyper} within \texttt{control.family} in the call to
+INLA. Priors on the hyperparameters of the latent effects are set
+using the parameter \texttt{hyper}, inside the \texttt{f()} function. \\
+
+Parameter \texttt{hyper} is a named list so that each element in the list
+defines the prior for a different hyperparameter. The names used in
+the list can be the names of the parameters or those used for the
+internal representation. These can be checked in the documentation
+or using function \texttt{inla.models()}.\\
+
+In this example we use a \texttt{logitbeta} prior and a \texttt{logtgaussian}
+prior (you can see all available priors with
+\texttt{names(inla.models()\$prior)}). We need to make sure we implement
+the same priors in the TMB example too. To verify how INLA
+implements these, we look at \texttt{inla.doc("logitbeta")} and
+\texttt{inla.doc("logtguassian")}.
+
+\paragraph{The \texttt{logitbeta} prior}
+\label{sec:org551c76d}
+This is a prior for a probability parameter, \(p\in(0, 1)\) which
+represented internally on the logit scale by \(\theta\):
+
+$$
+     \theta = g^{-1}(p) = \text{log}\frac{p}{1-p} =\text{logit}(p)
+     $$
+
+with density defined on \(\theta\) such that the \(p\) has a Beta(\emph{a}, \emph{b}) distribution
+
+$$
+     \pi(p) = \frac{\Gamma(a+b)}{\Gamma(a)\Gamma(b)}p^{a-1}(1-p)^{b-1}
+     $$
+
+and the density for \(\theta\) can be found using standard change
+of variable methods for \(p = g(\theta) = \frac{\text{exp}(\theta)}{1+\text{exp}(\theta)}\)
+
+
+\begin{align*}
+  \pi(\theta) = f_{\Theta}(\theta) &= f_{P}(g(\theta)) \times |g^{'}(\theta)| \\
+              &= \frac{\Gamma(a+b)}{\Gamma(a)\Gamma(b)} \left(  g(\theta)\right) ^{a-1} \left(1-g(\theta)\right)^{b-1}  \times \frac{\text{exp}(\theta)}{\left(1 + \text{exp}(\theta)  \right)^{2}} \\
+              &=\frac{\Gamma(a+b)}{\Gamma(a)\Gamma(b)} \left( \frac{\text{exp}(\theta)}{1+\text{exp}(\theta)}\right)^{a-1}\left(1-\frac{\text{exp}(\theta)}{1+\text{exp}(\theta)}\right)^{b-1}  \times \frac{\text{exp}(\theta)}{\left(1 + \text{exp}(\theta) \right)^{2}} \\
+\end{align*}
+
+
+\paragraph{the \texttt{logtgaussian} prior}
+\label{sec:orgc9a1cf5}
+As for the \texttt{logitbeta} prior, INLA specifies the distribution for
+the standard deviation, \(\sigma\), but internally represents the
+distribution on a transformed version of this parameter to
+improve symmetry and approximate Gaussianity. Here, INLA
+internally utilizes the log precision, \(\psi = \text{log}(\tau) =
+     \text{log}(\frac{1}{\sigma^{2}})\) scale. To align TMB with this
+INLA prior, we again determine the density for the internally
+used parameter given the specification on the oft-used parameter,
+\(\sigma\). For \(\sigma = g(\psi) =
+     \text{exp}(\frac{-\psi}{2})}\). For \(\sigma \sim \text{N}(\mu,
+     s^{2}) \mathds{1}\{\sigma > 0\}\), we find the distribution of
+\(\psi\) to be:
+
+\begin{align*}
+  \pi(\psi) = f_{\psi}(\psi) &= f_{\sigma}(g(\psi)) \times |g^{'}(\psi)| \\
+              &= \frac{1}{\sqrt{2\pi s^2}} \text{exp}\left[\frac{-1}{2s^2}\left(g(\psi) -\mu\right)^2 \right] \times \left|\frac{-\text{exp}(\frac{-\psi}{2})}{2}\right| \\
+              &= \frac{1}{\sqrt{8\pi s^2}}\text{exp}\left[\frac{-1}{2s^2}\left(\text{exp}(\frac{-\psi}{2}) -\mu\right)^2 - \frac{\psi}{2} \right]
+\end{align*}
+
+Note: since the truncation ensures \(\sigma > 0\), this relaxes to
+\(-\infty < \psi <\infty\) which, no doubt, is one of the reasons
+the INLA devs use this transformation.
+
+
+\subsection{Fitting in INLA}
+\label{sec:org7e3cd01}
+To fit the model in INLA, we need to define the model formula, the
+priors, prepare the data in an INLA data stack, and run the model.
+
+\subsubsection{Prepping for INLA}
+\label{sec:org44630ba}
+\begin{minted}[]{r}
+    # create the data stack for INLA
+    inla.data <- list(
+      y = nga1$poisson_obs, E = nga1$sampled_pop, region = nga1$ADM1_CODE
+    )
+
+    # Get the adjacency matrix INLA needs (1s on diagonal)
+    inla.adj.mat <- adj.mat + Diagonal(nrow(adj.mat))
+
+    # set prior for the intercept
+    # alpha ~ N(mean, prec)
+    priors  <- list(
+      alpha = list(prior = 'normal', params = c(0, 1 / 25))
+    )
+
+    # Set prior on $\text{logit}(\phi)$ s.t. the mixing param prior is
+    # phi ~ beta(1/2,1/2)$
+
+    # Set prior on $\text{\tau}$ s.t. the prior no scaling stdev is
+    # sigma ~ N(0, (1/5)^2) with sigma > 0 (truncated)
+
+    hyper_priors <-  list(
+      phi  = list(prior = "logitbeta", params=c(0.5, 0.5)),
+      prec = list(prior = "logtgaussian", params=c(0, 1/25))
+    )
+
+    # BYM2 model, no intercept, no covs
+    inla.formula <- y ~ 1 + f(region, model = "bym2",
+                              graph = adj.mat,
+                              hyper = hyper_priors,
+                              constr = TRUE)
+\end{minted}
+
+
+\subsubsection{The INLA model fit}
+\label{sec:orgad13263}
+\begin{minted}[]{r}
+
+    # fit the model
+    inla.bym2 <- inla(inla.formula,
+                      family = "poisson", E = E,
+                      data = inla.data,
+                      control.fixed = list(mean.intercept = 0, prec.intercept = 1/25),
+                      control.predictor = list(compute=TRUE),
+                      control.inla = list(strategy="simplified.laplace", fast=FALSE),
+                      verbose=FALSE, debug=TRUE, silent=TRUE)
+
+    # pull out the total, structured, and then unstructured means
+    # NOTE: to pull out SEs, of the unstructured, we need to do a proper
+    # transformation or transform draws and recalculate it
+    inla.bym2.random  <- inla.bym2$summary.random$region
+
+    total.id <- 1:(nrow(inla.bym2.random) / 2)
+    struc.id <- ((nrow(inla.bym2.random) / 2) + 1):nrow(inla.bym2.random)
+
+    inla.bym2.total <- inla.bym2.random[total.id, ]
+    inla.bym2.struc <- inla.bym2.random[struc.id, ]
+
+    inla.bym2.total.est <- inla.bym2.total$mean
+    inla.bym2.struc.est <- inla.bym2.struc$mean
+
+    # get the intercept
+    inla.bym2.fixed <- inla.bym2$summary.fixed
+    inla.bym2.alpha.est <- inla.bym2.fixed[grep("Intercept", rownames(inla.bym2.fixed)), ]$mean
+
+    # get the hyperpar estimates so we can calculate the unstructured portion
+    inla.bym2.hyper <- inla.bym2$summary.hyperpar
+    inla.bym2.tau.est <- inla.bym2.hyper[grep("Precision", rownames(inla.bym2.hyper)), ]$mean
+    inla.bym2.phi.est <- inla.bym2.hyper[grep("Phi", rownames(inla.bym2.hyper)), ]$mean
+
+
+    # total <- 1 / sqrt(tau) * (sqrt(1 - phi) * unstruct + sqrt(phi) * struct)
+    # unstruct <- (sqrt(tau) * total - sqrt(phi) * struct) / sqrt(1 - phi)
+    inla.bym2.unstr.est <- (sqrt(inla.bym2.tau.est) * inla.bym2.total.est -
+                            sqrt(inla.bym2.phi.est) * inla.bym2.struc.est) /
+      sqrt(1 - inla.bym2.phi.est)
+\end{minted}
+
+\begin{minted}[]{r}
+    glue("Here are the INLA fixed effects estimates:")
+    print(inla.bym2.fixed)
+    message('')
+    glue('true intercept is: {alpha}')
+\end{minted}
+
+\begin{minted}[]{r}
+    glue("Here are the INLA hyperparameter estimates:")
+    print(inla.bym2.hyper)
+    message('')
+    glue('true tau is: {tau}')
+    glue('true phi is: {phi}')
+\end{minted}
+
+\begin{verbatim}
+    Here are the INLA hyperparameter estimates:
+
+                              mean         sd 0.025quant  0.5quant 0.975quant
+    Precision for region 0.7262855 0.19727382  0.4045674 0.7051976  1.1731750
+    Phi for region       0.9291331 0.08946355  0.6693339 0.9623736  0.9988862
+                              mode
+    Precision for region 0.6648788
+    Phi for region       0.9986874
+
+
+    true tau is: 0.847894885164002
+
+    true phi is: 0.99494975164054
+\end{verbatim}
+
+\begin{minted}[]{r}
+    # plot scatters of three pieces
+    inla.effects <- cbind(nga1$unstruct_sim1, nga1$struct_sim1, nga1$total_sim1,
+                          inla.bym2.unstr.est, inla.bym2.struc.est, inla.bym2.total.est)
+
+    colnames(inla.effects) <- c("true unstr", "true struc", "true total",
+                                "inla unstr", "inla struc", "inla total")
+
+    lim <- max(abs(inla.effects))
+    pairs(inla.effects, xlim = c(-lim, lim), ylim = c(-lim, lim))
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/inla_effects_scatter.png}
+\end{center}
+
+\begin{minted}[]{r}
+    # and we can plot these estimates against the truth
+    nga1$inla.struc.est1 <- inla.bym2.struc.est
+    nga1$inla.total.est1 <- inla.bym2.total.est
+    nga1$inla.unstr.est1 <- inla.bym2.unstr.est
+    nga1$inla.risk.est1  <- exp(inla.bym2.total.est + inla.bym2.alpha.est)
+
+    unstr_brks <- seq(min(c(nga1$inla.unstr.est1, nga1$unstruct_sim1)),
+                      max(c(nga1$inla.unstr.est1, nga1$unstruct_sim1)), length = 6)
+    struc_brks <- seq(min(c(nga1$inla.struc.est1, nga1$struct_sim1)),
+                      max(c(nga1$inla.struc.est1, nga1$struct_sim1)), length = 6)
+    total_brks <- seq(min(c(nga1$inla.total.est1, nga1$total_sim1)),
+                      max(c(nga1$inla.total.est1, nga1$total_sim1)), length = 6)
+    risk_brks <- seq(min(c(nga1$inla.risk.est1, nga1$risk_sim1)),
+                     max(c(nga1$inla.risk.est1, nga1$risk_sim1)), length = 6)
+
+    unstr.sim1.tm <- tm_shape(nga1) +
+      tm_polygons("unstruct_sim1", style = "fixed", breaks = unstr_brks)
+    struc.sim1.tm <- tm_shape(nga1) +
+      tm_polygons("struct_sim1", style = "fixed", breaks = struc_brks)
+    total.sim1.tm <- tm_shape(nga1) +
+      tm_polygons("total_sim1", style = "fixed", breaks = total_brks)
+    risk.sim1.tm <- tm_shape(nga1) +
+      tm_polygons("risk_sim1", style = "fixed", breaks = risk_brks, palette = "-viridis")
+
+    inla.unstr.est1.tm <- tm_shape(nga1) +
+      tm_polygons("inla.unstr.est1", style = "fixed", breaks = unstr_brks)
+    inla.struc.est1.tm <- tm_shape(nga1) +
+      tm_polygons("inla.struc.est1", style = "fixed", breaks = struc_brks)
+    inla.total.est1.tm <- tm_shape(nga1) +
+      tm_polygons("inla.total.est1", style = "fixed", breaks = total_brks)
+    inla.risk.est1.tm <- tm_shape(nga1) +
+      tm_polygons("inla.risk.est1", style = "fixed", breaks = risk_brks, palette = "-viridis")
+
+    tmap_arrange(unstr.sim1.tm, inla.unstr.est1.tm,
+                 struc.sim1.tm, inla.struc.est1.tm,
+                 total.sim1.tm, inla.total.est1.tm,
+                 risk.sim1.tm, inla.risk.est1.tm,
+                 ncol = 2)
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/inla_mean_results.png}
+\end{center}
+
+
+\subsection{Fitting in TMB}
+\label{sec:org368a353}
+To fit in TMB, we need to define the model in a \texttt{C++} file
+(consisting of functions for the prior densities and the log
+likelihood as our objective function), compile the likelihood
+evaluation function, prep the data for the function, and then
+optimize.
+
+\subsubsection{{\bfseries\sffamily WAITING} Defining the TMB model}
+\label{sec:orgff7d8ac}
+The model is encoded within the \texttt{bym2.cpp} script with contents:
+
+\begin{minted}[]{c++}
+    // /////////////////////////////////////////////////////////////////////////////
+    // AOZ
+    // 2020
+    // Template file for fitting discrete space-only BYM2 models
+    // /////////////////////////////////////////////////////////////////////////////
+
+    // /////////////////////////////////////////////////////////////////////////////
+    // NOTES:
+    // 1. Type `Type` is a special TMB type that should be used for all variables, except `int` can be used as well
+    // 2. Anything in the density namespace (ie SEPARABLE) returns the negative log likelihood and is thus added to accumulator
+    //    also, other density function such as dnorm and dbinom return positive log likelihood and are thus subtracted away.
+    // /////////////////////////////////////////////////////////////////////////////
+
+    // include libraries
+    #include <TMB.hpp>
+    #include <Eigen/Sparse>
+    #include <vector>
+    using namespace density;
+    using Eigen::SparseMatrix;
+
+    // helper function for logit beta prior on theta = logit(probability)
+    //   s.t. probability = p ~ Beta(a, b)
+    template<class Type>
+    Type dlogitbeta(Type logit_p, Type a, Type b, int give_log=0)
+    {
+      Type part1 = lgamma(a + b) - lgamma(a)  - lgamma(b);
+      Type part2 = (a - 1) * (logit_p - log(1 + exp(logit_p)));
+      Type part3 = (b - 1) * log( 1 - exp(logit_p)/(1 + exp(logit_p)));
+      Type part4 =  logit_p - 2 * log( 1 + exp(logit_p));
+
+      Type logres = part1 + part2 + part3 + part4;
+
+      if(give_log)return logres; else return exp(logres);
+    }
+
+    // helper function for pc prior on log(precision) of multi-var normal
+    // where stdev sigma ~ N(u, s) & sigma > 0
+    // internally, INLA places the prior on log(precision)
+    template<class Type>
+    Type dlogtgaussian(Type log_prec, Type u, Type s, int give_log=0)
+    {
+      Type part1 = -0.5 * log(8 * M_PI) - s;
+      Type part2 = -0.5 * 1 / pow(s, 2) * pow( (exp(-log_prec / 2) - u ), 2) - log_prec / 2;
+
+      Type logres = part1 + part2;
+
+      if(give_log)return logres; else return exp(logres);
+    }
+
+    // helper function to create joint (sparse) matrix of the BYM2 joint precision
+    template<class Type>
+    //SparseMatrix<Type> bym2_Q(Type logit_phi, Type log_prec,
+    SparseMatrix<Type> bym2_Q(Type logit_phi, Type log_prec,
+                              SparseMatrix<Type> Q_struc) {
+
+      int N = int(Q_struc.rows()); // number of spatial regions
+      int full_N = N + N;      // top half is total effect, bottom half is structured effect
+      Type tau = exp(log_prec);
+      Type phi = exp(logit_phi)/(1 + exp(logit_phi));
+
+      SparseMatrix<Type> Q(full_N, full_N);
+
+      // block 11
+      for(int i = 0; i < N; i++){
+        Q.coeffRef(i, i) = (tau / (1 - phi));
+      }
+
+      // block 12 and block 21
+      for(int i = 1; i < N; i++){
+        Q.coeffRef(i, N+i) = (-sqrt(phi * tau) / (1 - phi)); // diag of block 12
+        Q.coeffRef(N+i, i) = (-sqrt(phi * tau) / (1 - phi)); // diag of block 21
+      }
+
+      // block 22
+
+      // first, correct diagonal as needed for the joint specification
+      for(int i = 0; i < N; i++){
+        Q_struc.coeffRef(i, i) = Q_struc.coeffRef(i, i) + (phi / (1-phi));
+      }
+      // and then fill it into the joint precision
+      for(int i = 0; i < N; i++){
+        for(int j = 0; j < N; j++){
+          Q.coeffRef(N + i, N + j) = Q_struc.coeffRef(i, j);
+        }
+      }
+
+      return Q;
+    }
+
+    // make a structure to house our named boolean option flags
+    template<class Type>
+    struct option_list {
+
+      int adreport_on;
+      int normal_trick;
+      int verbose;
+
+      option_list(SEXP x){
+          adreport_on  = asVector<int>(getListElement(x,"adreport_on"))[0];
+          normal_trick = asVector<int>(getListElement(x,"normal_trick"))[0];
+          verbose = asVector<int>(getListElement(x,"verbose"))[0];
+      }
+    };
+
+
+    ///////////////////////////
+    // our main function     //
+    // to calculate the jnll //
+    ///////////////////////////
+    template<class Type>
+    Type objective_function<Type>::operator() ()
+    {
+
+      // ~~~~~~~~~------------------------------------------------------~~
+      // ~~~~~~~~~------------------------------------------------------~~
+      // FIRST, we define params/values/data that will be passed in from R
+      // ~~~~~~~~~------------------------------------------------------~~
+      // ~~~~~~~~~------------------------------------------------------~~
+
+      // normalization flag
+      DATA_INTEGER( flag ); // flag == 0 => no data contribution added to jnll
+
+      // Indices
+      DATA_INTEGER( N );   // Number of spatial regions
+
+      // Data
+      DATA_VECTOR( y_i );   // Num occurrences (deaths) of poisson outcome per region
+      DATA_VECTOR( e_i );   // populations per region
+      // DATA_MATRIX( X_alpha );  // Covariate 'design matrix' for just intercept (i.e. 1col matrix of all 1s)
+      // DATA_MATRIX( X_betas );   // Covariate design matrix excluding intercept columm
+
+      // joint bym2 precision.
+      // first half of entries are the (weighted) total (struct + unstructured)
+      // second half of entries are the structured effects
+      DATA_SPARSE_MATRIX( Q_struc );
+
+      // Options
+      DATA_STRUCT(options, option_list);  // boolean vector of options to be used to select different models/modelling options: see above
+
+      // Prior specifications
+      DATA_VECTOR( bym2_phi_pri ); //specifying a and b for logitbeta    on logit(phi) with phi~Beta(a,b)
+      DATA_VECTOR( bym2_tau_pri ); //specifying u and s for logtgaussian on log(tau)   with sigma~N(u,s)
+
+
+      if(options.verbose == 1){
+        std::cout << "Data Loaded.\n";
+      }
+
+      // Fixed effects
+      // PARAMETER( alpha );           // Intercept
+      // PARAMETER_VECTOR( betas );    // Covariate coefficients
+      // PARAMETER( log_gauss_sigma ); // if using normal likelihood, log sd of single normal obs
+      PARAMETER( logit_phi );          // logit of BYM2 mixing parameter
+      PARAMETER( log_tau );            // Log of INLA tau param (precision of space covariance matrix)
+
+      // Random effects
+      PARAMETER_ARRAY( Epsilon_s );    // effects for each spatial
+                                       // region. length 2N. first half is
+                                       // total, seconf half is structured
+
+      if(options.verbose == 1){
+        std::cout << "Params Loaded.\n";
+      }
+
+      // ~~~~~~~~~------------------------------------------------~~
+      // ~~~~~~~~~------------------------------------------------~~
+      // SECOND, we define all other objects that we need internally
+      // ~~~~~~~~~------------------------------------------------~~
+      // ~~~~~~~~~------------------------------------------------~~
+
+      // objective function -- joint negative log-likelihood
+      vector<Type> jnll_comp(3);
+      Type jnll = 0; // sum of jnll_comp
+
+      // set/print parallel info
+      // max_parallel_regions = omp_get_max_threads();
+      // printf("This is thread %d\n", max_parallel_regions);
+      max_parallel_regions = 1;
+
+      // Make spatial precision matrix
+      SparseMatrix<Type> Q_s = bym2_Q(logit_phi, log_tau, Q_struc);
+      int full_N = N + N;      // top half is total effect, bottom half is structured effect
+
+      // Transform some of our parameters
+      Type bym2_phi = exp(logit_phi) / (1 + exp(logit_phi));
+      Type bym2_prec = exp(log_tau);
+      Type bym2_sigma = exp(-.5 * log_tau);
+
+      // Define objects for derived values
+      // vector<Type> fe_i(num_i); // main effect alpha + X_betas %*% t(betas)
+      vector<Type> epsilon_s( 2*N );     // joint total (followed by) structured effects vec
+      vector<Type> total_latent_i( N );  // latent field for each region
+      vector<Type> struc_latent_i( N );  // structured component of latent field for each region
+      vector<Type> risk_i( N );          // exp(total latent field) risk for each region
+
+      if(options.verbose == 1){
+        std::cout << "Transforms initialized.\n";
+        std::cout << printf("logit_phi is: %f\n", logit_phi);
+        std::cout << printf("phi is: %f\n", bym2_phi);
+        std::cout << printf("log_tau is: %f\n", log_tau);
+        std::cout << printf("tau is: %f\n", bym2_prec);
+      }
+
+
+
+      // evaluate fixed effects for intercept and covs if applicable
+      // fe_i = X_alpha * Type(0.0); // initialize
+      // if(options[3] == 1){
+      //   fe_i = X_betas * betas.matrix(); // init w/ covariate effects if using
+      // }
+
+      // if(options[2] == 1){
+      //   for (int i = 0; i < num_i; i++){
+      //     fe_i[i] = fe_i[i] + alpha; // add on intercept if using
+      //   }
+      // }
+
+      // Transform GMRFs and make vector form
+      for(int s = 0; s < N; s++){
+        epsilon_s[s] = Epsilon_s(s);
+        epsilon_s[N + s] = Epsilon_s(N + s);
+        // unnecessary to start with the array and unlist in space only,
+        // but helpful in sXt
+      }
+
+      if(options.verbose == 1){
+        std::cout << "constructed epsilon_s.\n";
+      }
+
+      // constrain the structured component of the GMRF to sum-to-zero
+      // the constrained vector is calculated as:
+      // x_c = x - Q^{-1}A'(AQ^{-1}A')^{-1}(Ax-e)
+      // for constraint Ax=e, and for GMRF x with precision Q
+      matrix<Type> Q_inv_s = invertSparseMatrix(Q_s);
+
+      if(options.verbose == 1){
+        std::cout << "constructed Q_inv_s.\n";
+      }
+      // matrix<Type> Q_inv(full_N, full_N);
+      // for(int i=0; i < full_N; i++){
+      //   for(int j=0; j < full_N; j++){
+      //     Q_inv(i, j) = Q_inv_s.coeffRef(i, j);
+      //   }
+      // }
+
+      // column vector
+      vector<Type> A(full_N); // sum all components
+      for(int i = 0; i < N; i++){
+        A( i )     = 0; // no constraints on total effects
+        A( N + i ) = 1; // sum-to-0 on structured effects
+      }
+
+      if(options.verbose == 1){
+        std::cout << "Constructed A.\n";
+      }
+
+      // row vector
+      matrix<Type> A_t = A.matrix().transpose();
+      if(options.verbose == 1){
+        std::cout << "Constructed A_t.\n";
+      }
+
+      matrix<Type> QinvA_mat = Q_inv_s * A.matrix();
+
+      if(options.verbose == 1){
+        std::cout << "Constructed QinvA_mat \n";
+        //std::cout << printf("QinvA_mat dims are: %i x %i\n", QinvA_mat.rows(), QinvA_mat.cols());
+      }
+
+
+      vector<Type> QinvA(full_N);
+      for(int i=0;i<full_N;i++){
+        QinvA(i) = QinvA_mat(i,0);
+      }
+
+      if(options.verbose == 1){
+        std::cout << "Constructed QinvA \n";
+      }
+
+      // Type e = 0;
+
+
+      // Type AQinvA; // b/c of this particular A, we can find this
+      //                  // value, (AQ^{-1}A')^{-1}, with summation and
+      //                  // division
+      // for(int i=N; i < full_N; i++){
+      //   for(int j=N; j < full_N; j++){
+      //     AQinvA += Q_inv(N+i, N+j);
+      //   }
+      // }
+
+      matrix<Type> AQinvA;
+      AQinvA = A_t * QinvA_mat;
+
+      Type AQinvA_inv = 1 / AQinvA(0,0);
+
+      if(options.verbose == 1){
+        std::cout << "Constructed AQinvA_inv.\n";
+      }
+
+      // Type Ax = 0;
+      // for(int i=N; i < full_N; i++){
+      //   Ax += epsilon_s(i);
+      // }
+      Type Ax = (A * epsilon_s).sum();
+
+      if(options.verbose == 1){
+        std::cout << "Constructed Ax.\n";
+      }
+
+      // if(options.verbose == 1){
+      //   std::cout << printf("QinvA: %f\n", QinvA);
+      //   std::cout << printf("AQinvA_inv: %f\n", AQinvA_inv);
+      //   std::cout << printf("Ax: %f\n", Ax);
+      // }
+
+      // with all the pieces, we can now constrain the vector
+      //vector<Type> epsilon_s_c = epsilon_s - QinvA * (AQinvA_inv * Ax);
+      vector<Type> epsilon_s_c = epsilon_s - QinvA * AQinvA_inv * Ax;
+
+      if(options.verbose == 1){
+        std::cout << "Constructed epsilon_s_c.\n";
+      }
+
+      //
+      for(int s = 0; s < N; s++){
+        total_latent_i[s] = epsilon_s_c(s);     // first have is total
+        struc_latent_i[s] = epsilon_s_c(N + s); // second half is structured effect
+      }
+
+      if(options.verbose == 1){
+        std::cout << "Transforms filled in.\n";
+      }
+
+
+      // ~~~~~~~~~------------------------------------------------~~-
+      // ~~~~~~~~~------------------------------------------------~~-
+      // THIRD, we calculate the contribution to the likelihood from:
+      // 1) priors
+      // 2) GP field
+      // 3) data
+      // ~~~~~~~~~------------------------------------------------~~-
+      // ~~~~~~~~~------------------------------------------------~~-
+
+
+      /////////
+      // (1) //
+      /////////
+      // the random effects. we do this so to do the normalization outside of every optimization step
+      // 'GP' field contribution (i.e. log-lik of Gaussian-Markov random fields, GMRFs)
+      // NOTE: likelihoods from namespace 'density' already return NEGATIVE log-liks so we add
+      //       other likelihoods return positive log-liks so we subtract
+
+      // With the constrained epsilon, their density is:
+      // pi(epsilon | A*epsilon) = pi(A*epsilon|epsilon) * pi(epsilon) / pi (A*epsilon)
+      // where
+      // pi(epsilon)  is the usual GMRF with precision Q_s
+      // pi(A*epsilon|epsilon) is a 1d gaussian with mean A*0 = 0, and covariance AQinvA^T
+      // pi(Ax) is 0 if the constraint is not met, or the constant |AA^T|^{-.5} if it is metabolic
+
+      if(options.normal_trick == 1){
+        // then we are not calculating the normalizing constant in the inner opt.
+        // that norm constant means taking an expensive determinant of Q_s
+        jnll_comp[0] -= dnorm(Ax, Type(0.0), Type(sqrt(AQinvA(0,0))), true); // N(mean, sd)
+        jnll_comp[0] += GMRF(Q_s, false)(epsilon_s);
+      }else{
+        jnll_comp[0] -= dnorm(Ax, Type(0.0), Type(sqrt(AQinvA(0,0))), true); // N(mean, sd)
+        jnll_comp[0] += GMRF(Q_s)(epsilon_s);
+      }
+
+      // add other random effects here to get the 'flag' option working correctly
+
+      if(options.normal_trick == 1){
+        if (flag == 0) return jnll_comp[0]; // return without data ll contrib to avoid unneccesary log(det(Q)) calcs
+      }
+
+      if(options.verbose == 1){
+        std::cout << printf("\nGMRF contrib added: %f\n", jnll_comp[0]);
+      }
+
+      /////////
+      // (2) //
+      /////////
+      // Prior contributions to joint likelihood
+
+      // add in hyperpriors for bym2
+      jnll_comp[1] -= dlogitbeta(logit_phi,
+                                 bym2_phi_pri[0], bym2_phi_pri[1],
+                                 true);
+
+      jnll_comp[1] -= dlogtgaussian(log_tau,
+                                    bym2_tau_pri[0], bym2_tau_pri[1],
+                                    true);
+
+      // prior for intercept
+      //if(options[2] == 1){
+      //  jnll -= dnorm(alpha, alphaj_pri[0], alphaj_pri[1], true); // N(mean, sd)
+      //}
+
+      // prior for covariate coefs
+      // if(options[3] == 1){
+      //   for( int j = 0; j < betas.size(); j++){
+      //     jnll -= dnorm(betas(j), alphaj_pri[0], alphaj_pri[1], true); // N(mean, sd)
+      //   }
+      // }
+
+      if(options.verbose == 1){
+        std::cout << printf("\nPrior contrib added: %f\n", jnll_comp[1]);
+      }
+
+      /////////
+      // (3) //
+      /////////
+      // Likelihood contribution from each datapoint i
+
+      for (int i = 0; i < N; i++){
+
+        // link to the poisson rate per person
+        risk_i(i) = exp(total_latent_i(i));
+
+        // and add data contribution to jnll
+        jnll_comp[2] -= dpois( y_i(i), risk_i(i) * e_i(i), true );
+
+      } // for( i )
+
+      if(options.verbose == 1){
+        std::cout << printf("\nData contrib added: %f\n", jnll_comp[2]);
+      }
+
+      // combine all parts of contribs to the jnll
+      jnll += jnll_comp.sum();
+
+
+      // ~~~~~~~~~~~
+      // ADREPORT
+      // get means and prec/cov of transformed params
+      // include (untransformed) params if you want joint prec between params and transforms
+      // ~~~~~~~~~~~
+
+      REPORT(QinvA_mat);
+      REPORT(AQinvA_inv);
+      REPORT(Ax);
+
+      if(options.adreport_on == 1){
+        ADREPORT(logit_phi);
+        ADREPORT(log_tau);
+        ADREPORT(bym2_phi);
+        ADREPORT(bym2_prec);
+        ADREPORT(bym2_sigma);
+        ADREPORT(epsilon_s_c);
+      }
+
+      if(options.verbose == 1){
+        std::cout << printf("Post adreport pre return jnll: %f\n", jnll);
+      }
+
+      return jnll;
+    }
+\end{minted}
+
+
+\subsubsection{Prepping for the TMB fit}
+\label{sec:org2f7f457}
+With the model defined, we can compile it from within R and prep
+the data objects to pass into it.
+
+\begin{minted}[]{r}
+
+    ## we specify the location of the cpp file, and then TMB can compiles
+    TMB::compile("./bym2.cpp")
+
+    ## then we load the compiled function into R for use within an optimizer
+    try(dyn.unload(dynlib("bym2")), silent = T) ## try unloading before (re)load
+    dyn.load( dynlib("bym2") )
+
+    ## next, we set up the objects to pass into TMB
+
+    ## first, the data
+    data_full <- list(N = length(nga1$poisson_obs),
+                      y_i = nga1$poisson_obs,
+                      e_i = nga1$sampled_pop,
+                      Q_struc = bym2.scaled.prec, # scaled precision for structured part of BYM2
+                      options = list(adreport_on = 1,
+                                     normal_trick = 0,
+                                     verbose = 0),
+                      flag = 1, ## only used if options[['normal_trick']]==1
+                      bym2_alpha_pri = priors[['alpha']][['params']],
+                      bym2_phi_pri = hyper_priors[['phi']][['params']],
+                      bym2_tau_pri = hyper_priors[['prec']][['params']])
+
+    ## then we specify the starting values for the TMB parameters (and
+    ## their form/dimensions
+    tmb_params <- list(alpha = 0,
+                       logit_phi = 0,
+                       log_tau = 0,
+                       Epsilon_s = matrix(0, ncol = 1, nrow = 2 * nrow(data_full[['Q_struc']])))
+
+    ## we specify which of the named params are random effects to be integrated out
+    rand_effs <- c('Epsilon_s')
+
+    ## and lastly, we can NULL out params that are in the c++ template but
+    ## which won't be used in this run. this allows us to build up a more
+    ## complicated template that can take different options. named items
+    ## in the list which as set to factor(NA) will be left out
+    ADmap <- list()
+
+    ## eg, if we wanted to leave out the intercept from the model
+    ## ADmap[['alpha']] <- factor(NA)
+\end{minted}
+
+
+\subsubsection{The TMB model fit}
+\label{sec:org5c8214e}
+Now we create the likelihood evaluation object/function complete
+with all data inputs that can be optimized over.
+
+\begin{minted}[]{r}
+    ## make the autodiff generated liklihood func & gradient
+    obj <- MakeADFun(data=data_full,
+                     parameters=tmb_params,
+                     random=rand_effs,
+                     map = ADmap,
+                     hessian=TRUE,
+                     DLL="bym2")
+
+    ## call the optimizer
+    opt0 <- try(do.call("nlminb",
+                        list(start       =    obj$par,
+                             objective   =    obj$fn,
+                             gradient    =    obj$gr,
+                             lower = rep(-10, length(obj$par)),
+                             upper = rep( 10, length(obj$par)),
+                             control     =    list(trace=1))))
+
+    ## once it is fit, we can report the estimates
+    SD0 <- TMB::sdreport(obj, getJointPrecision=TRUE,
+                         getReportCovariance = TRUE,
+                         bias.correct = TRUE,
+                         bias.correct.control = list(sd = TRUE))
+
+    ## summarize the outputs from the model (and adreport if used)
+    ## summary(SD0, report = 'report')
+
+    R0 <- obj$report()
+\end{minted}
+
+\begin{minted}[]{r}
+    glue("Here are the TMB fixed effects estimates:")
+    print(SD0)
+    message('')
+    glue('true intercept is: {alpha}')
+\end{minted}
+
+\begin{verbatim}
+
+    Here are the TMB fixed effects estimates:
+
+    sdreport(.) result
+               Estimate Std. Error
+    alpha     -2.614833 0.05052334
+    logit_phi  2.137038 0.92807433
+    log_tau    1.763786 0.10398884
+    Maximum gradient component: 1.853538e-06
+
+
+    true intercept is: -3
+\end{verbatim}
+
+
+\begin{minted}[]{r}
+    glue("Here are the transforms of the TMB hyperparameters:")
+    print(summary(SD0, 'report')[1:5, ])
+    message('')
+    glue('true tau is: {tau}')
+    glue('true phi is: {phi}')
+\end{minted}
+
+\begin{verbatim}
+    Here are the transforms of the TMB hyperparameters:
+
+                Estimate Std. Error Est. (bias.correct) Std. (bias.correct)
+    logit_phi  2.1370385 0.92807433           2.1370385          0.92807433
+    log_tau    1.7637863 0.10398884           1.7637863          0.10398884
+    bym2_phi   0.8944513 0.08761777           0.8944513          0.08761777
+    bym2_prec  5.8344868 0.60672154           5.8344868          0.60672154
+    bym2_sigma 0.4139984 0.02152561           0.4139984          0.02152561
+
+
+    true tau is: 0.847894885164002
+
+    true phi is: 0.99494975164054
+\end{verbatim}
+
+
+\begin{minted}[]{r}
+    # pull out the total, structured, and then unstructured means NOTE: to
+    # pull out SEs, of the unstructured, we need to do a proper
+    # transformation inside the cpp script and output the results via
+    # adreport, or transform draws and recalculate
+
+    tmb.bym2.adreport  <- SD0$value
+
+    const.eps.idx <- grep("epsilon_s_c", names(tmb.bym2.adreport))
+    const.eps.num <- length(const.eps.idx)
+
+    total.id <- const.eps.idx[1:(const.eps.num / 2)]
+    struc.id <- const.eps.idx[((const.eps.num / 2) + 1):const.eps.num]
+
+    tmb.bym2.total <- data.table(mean = tmb.bym2.adreport[total.id],
+                                 sd   = sqrt(diag(SD0$cov)[total.id]))
+    tmb.bym2.struc <- data.table(mean = tmb.bym2.adreport[struc.id],
+                                 sd   = sqrt(diag(SD0$cov)[struc.id]))
+
+    tmb.bym2.total.est <- tmb.bym2.total$mean
+    tmb.bym2.struc.est <- tmb.bym2.struc$mean
+
+    # get the fixed intercept estimates
+    tmb.bym2.alpha <- summary(SD0)[grep('alpha', rownames(summary(SD0))), ]
+    tmb.bym2.alpha.est <- tmb.bym2.alpha[['Estimate']]
+
+    # get the hyperpar estimates so we can calculate the unstructured portion
+    tmb.bym2.hyper   <- summary(SD0, 'report')
+    tmb.bym2.tau.est <- tmb.bym2.hyper[grep("bym2_prec", rownames(tmb.bym2.hyper)), ][['Estimate']]
+    tmb.bym2.phi.est <- tmb.bym2.hyper[grep("bym2_phi", rownames(tmb.bym2.hyper)), ][['Estimate']]
+
+    # unstruct <- (sqrt(tau) * total - sqrt(phi) * struct) / sqrt(1 - phi)
+    tmb.bym2.unstr.est <- (sqrt(tmb.bym2.tau.est) * tmb.bym2.total.est -
+                           sqrt(tmb.bym2.phi.est) * tmb.bym2.struc.est) /
+      sqrt(1 - tmb.bym2.phi.est)
+\end{minted}
+
+\begin{minted}[]{r}
+    # plot scatters of three pieces
+    tmb.effects <- cbind(nga1$unstruct_sim1, nga1$struct_sim1, nga1$total_sim1,
+                          tmb.bym2.unstr.est, tmb.bym2.struc.est, tmb.bym2.total.est)
+
+    colnames(tmb.effects) <- c("true unstr", "true struc", "true total",
+                               "tmb unstr", "tmb struc", "tmb total")
+
+    lim <- max(abs(tmb.effects))
+    pairs(tmb.effects, xlim = c(-lim, lim), ylim = c(-lim, lim))
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/tmb_effects_scatter.png}
+\end{center}
+
+\begin{minted}[]{r}
+    # and we can plot these estimates against the truth
+    nga1$tmb.struc.est1 <- tmb.bym2.struc.est
+    nga1$tmb.total.est1 <- tmb.bym2.total.est
+    nga1$tmb.unstr.est1 <- tmb.bym2.unstr.est
+    nga1$tmb.risk.est1  <- exp(tmb.bym2.total.est + tmb.bym2.alpha.est)
+
+    unstr_brks <- seq(min(c(nga1$tmb.unstr.est1, nga1$unstruct_sim1)),
+                      max(c(nga1$tmb.unstr.est1, nga1$unstruct_sim1)), length = 9)
+    struc_brks <- seq(min(c(nga1$tmb.struc.est1, nga1$struct_sim1)),
+                      max(c(nga1$tmb.struc.est1, nga1$struct_sim1)), length = 9)
+    total_brks <- seq(min(c(nga1$tmb.total.est1, nga1$total_sim1)),
+                      max(c(nga1$tmb.total.est1, nga1$total_sim1)), length = 9)
+    risk_brks <- seq(min(c(nga1$tmb.risk.est1, nga1$risk_sim1)),
+                     max(c(nga1$tmb.risk.est1, nga1$risk_sim1)), length = 9)
+
+    unstr.sim1.tm <- tm_shape(nga1) +
+      tm_polygons("unstruct_sim1", style = "fixed", breaks = unstr_brks)
+    struc.sim1.tm <- tm_shape(nga1) +
+      tm_polygons("struct_sim1", style = "fixed", breaks = struc_brks)
+    total.sim1.tm <- tm_shape(nga1) +
+      tm_polygons("total_sim1", style = "fixed", breaks = total_brks)
+    risk.sim1.tm <- tm_shape(nga1) +
+      tm_polygons("risk_sim1", style = "fixed", breaks = risk_brks, palette = "-viridis")
+
+    tmb.unstr.est1.tm <- tm_shape(nga1) +
+      tm_polygons("tmb.unstr.est1", style = "fixed", breaks = unstr_brks)
+    tmb.struc.est1.tm <- tm_shape(nga1) +
+      tm_polygons("tmb.struc.est1", style = "fixed", breaks = struc_brks)
+    tmb.total.est1.tm <- tm_shape(nga1) +
+      tm_polygons("tmb.total.est1", style = "fixed", breaks = total_brks)
+    tmb.risk.est1.tm <- tm_shape(nga1) +
+      tm_polygons("tmb.risk.est1", style = "fixed", breaks = risk_brks, palette = "-viridis")
+
+    tmap_arrange(unstr.sim1.tm, tmb.unstr.est1.tm,
+                 struc.sim1.tm, tmb.struc.est1.tm,
+                 total.sim1.tm, tmb.total.est1.tm,
+                 risk.sim1.tm, tmb.risk.est1.tm,
+                 ncol = 2)
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/tmb_mean_results.png}
+\end{center}
+
+
+\subsubsection{Taking draws from the TMB model}
+\label{sec:orgf50c1c3}
+\begin{minted}[]{r}
+    ## number of draws
+    ndraws = 500
+
+    ## now we can take draws and project to space-time raster locs
+    mu <- c(SD0$par.fixed, SD0$par.random)
+
+    ## first, try to get the cholesky decomp of the precision
+    L <- try(suppressWarnings(Cholesky(SD0$jointPrecision, super = T)), silent = TRUE)
+
+    ## if that works, then take draws
+
+    if(class(L) != "try-error"){
+      ## then we have a PD precision and we're good to go
+
+      tmb_draws <- rmvnorm_prec(mu = mu , prec = SD0$jointPrecision, n.sims = ndraws)
+
+      ## separate out the tmb_draws
+      parnames <- c(names(SD0$par.fixed), names(SD0$par.random))
+
+      alpha_tmb_draws <- tmb_draws[parnames == 'alpha',]
+      logit_phi_tmb_draws  <- tmb_draws[parnames == 'logit_phi',]
+      log_tau_tmb_draws    <- matrix(tmb_draws[parnames == 'log_tau',], nrow = 1)
+
+      ## make relevant transformations
+      phi_tmb_draws <- exp(logit_phi_tmb_draws) / (1 + exp(logit_phi_tmb_draws))
+      tau_tmb_draws <- exp(log_tau_tmb_draws)
+      sigma_tmb_draws <- 1 / sqrt(tau_tmb_draws)
+    }
+
+\end{minted}
+
+
+\subsection{Comparing INLA and TMB fits}
+\label{sec:org9a63cae}
+\subsubsection{Plot comparing mean estimates}
+\label{sec:orgdb6f67b}
+\begin{minted}[]{r}
+   # and we can plot these estimates against the truth
+
+   unstr_brks <- seq(min(c(nga1$tmb.unstr.est1, nga1$inla.unstr.est1, nga1$unstruct_sim1)),
+                     max(c(nga1$tmb.unstr.est1, nga1$inla.unstr.est1, nga1$unstruct_sim1)), length = 9)
+   struc_brks <- seq(min(c(nga1$tmb.struc.est1, nga1$inla.struc.est1, nga1$struct_sim1)),
+                     max(c(nga1$tmb.struc.est1, nga1$inla.struc.est1, nga1$struct_sim1)), length = 9)
+   total_brks <- seq(min(c(nga1$tmb.total.est1, nga1$inla.total.est1, nga1$total_sim1)),
+                     max(c(nga1$tmb.total.est1, nga1$inla.total.est1, nga1$total_sim1)), length = 9)
+   risk_brks <- seq(min(c(nga1$tmb.risk.est1, nga1$inla.risk.est1, nga1$risk_sim1)),
+                    max(c(nga1$tmb.risk.est1, nga1$inla.risk.est1, nga1$risk_sim1)), length = 9)
+
+   unstr.sim1.tm <- tm_shape(nga1) +
+     tm_polygons("unstruct_sim1", style = "fixed", breaks = unstr_brks)
+   struc.sim1.tm <- tm_shape(nga1) +
+     tm_polygons("struct_sim1", style = "fixed", breaks = struc_brks)
+   total.sim1.tm <- tm_shape(nga1) +
+     tm_polygons("total_sim1", style = "fixed", breaks = total_brks)
+   risk.sim1.tm <- tm_shape(nga1) +
+     tm_polygons("risk_sim1", style = "fixed", breaks = risk_brks, palette = '-viridis')
+
+   inla.unstr.est1.tm <- tm_shape(nga1) +
+     tm_polygons("inla.unstr.est1", style = "fixed", breaks = unstr_brks)
+   inla.struc.est1.tm <- tm_shape(nga1) +
+     tm_polygons("inla.struc.est1", style = "fixed", breaks = struc_brks)
+   inla.total.est1.tm <- tm_shape(nga1) +
+     tm_polygons("inla.total.est1", style = "fixed", breaks = total_brks)
+   inla.risk.est1.tm <- tm_shape(nga1) +
+     tm_polygons("inla.risk.est1", style = "fixed", breaks = risk_brks, palette = '-viridis')
+
+   tmb.unstr.est1.tm <- tm_shape(nga1) +
+     tm_polygons("tmb.unstr.est1", style = "fixed", breaks = unstr_brks)
+   tmb.struc.est1.tm <- tm_shape(nga1) +
+     tm_polygons("tmb.struc.est1", style = "fixed", breaks = struc_brks)
+   tmb.total.est1.tm <- tm_shape(nga1) +
+     tm_polygons("tmb.total.est1", style = "fixed", breaks = total_brks)
+   tmb.risk.est1.tm <- tm_shape(nga1) +
+     tm_polygons("tmb.risk.est1", style = "fixed", breaks = risk_brks, palette = '-viridis')
+
+   tmap_arrange(unstr.sim1.tm, inla.unstr.est1.tm, tmb.unstr.est1.tm,
+                struc.sim1.tm, inla.struc.est1.tm, tmb.struc.est1.tm,
+                total.sim1.tm, inla.total.est1.tm, tmb.total.est1.tm,
+                risk.sim1.tm, inla.risk.est1.tm, tmb.risk.est1.tm,
+                ncol = 3)
+
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/inla_and_tmb_mean_results.png}
+\end{center}
+
+
+\subsubsection{Mean residuals plot}
+\label{sec:org24ef611}
+\begin{minted}[]{r}
+   # get the residuals for each
+   nga1$inla.unstr.resid1  <- nga1$unstruct_sim1 - nga1$inla.unstr.est1
+   nga1$inla.struc.resid1  <- nga1$struct_sim1 - nga1$inla.struc.est1
+   nga1$inla.total.resid1  <- nga1$total_sim1 - nga1$inla.total.est1
+   nga1$inla.risk.resid1  <- nga1$risk_sim1 - nga1$inla.risk.est1
+
+   nga1$tmb.unstr.resid1  <- nga1$unstruct_sim1 - nga1$tmb.unstr.est1
+   nga1$tmb.struc.resid1  <- nga1$struct_sim1 - nga1$tmb.struc.est1
+   nga1$tmb.total.resid1  <- nga1$total_sim1 - nga1$tmb.total.est1
+   nga1$tmb.risk.resid1  <- nga1$risk_sim1 - nga1$tmb.risk.est1
+
+   unstr_brks <- seq(min(c(nga1$tmb.unstr.resid1, nga1$inla.unstr.resid1)),
+                     max(c(nga1$tmb.unstr.resid1, nga1$inla.unstr.resid1)), length = 6)
+   struc_brks <- seq(min(c(nga1$tmb.struc.resid1, nga1$inla.struc.resid1)),
+                     max(c(nga1$tmb.struc.resid1, nga1$inla.struc.resid1)), length = 6)
+   total_brks <- seq(min(c(nga1$tmb.total.resid1, nga1$inla.total.resid1)),
+                     max(c(nga1$tmb.total.resid1, nga1$inla.total.resid1)), length = 6)
+   risk_brks <- seq(min(c(nga1$tmb.risk.resid1, nga1$inla.risk.resid1)),
+                    max(c(nga1$tmb.risk.resid1, nga1$inla.risk.resid1)), length = 6)
+
+   unstr.sim1.tm <- tm_shape(nga1) +
+     tm_polygons("unstruct_sim1", style = "quantile")
+   struc.sim1.tm <- tm_shape(nga1) +
+     tm_polygons("struct_sim1", style = "quantile")
+   total.sim1.tm <- tm_shape(nga1) +
+     tm_polygons("total_sim1", style = "quantile")
+   risk.sim1.tm <- tm_shape(nga1) +
+     tm_polygons("risk_sim1", style = "quantile")
+
+   inla.unstr.resid1.tm <- tm_shape(nga1) +
+     tm_polygons("inla.unstr.resid1", style = "fixed", breaks = unstr_brks)
+   inla.struc.resid1.tm <- tm_shape(nga1) +
+     tm_polygons("inla.struc.resid1", style = "fixed", breaks = struc_brks)
+   inla.total.resid1.tm <- tm_shape(nga1) +
+     tm_polygons("inla.total.resid1", style = "fixed", breaks = total_brks)
+   inla.risk.resid1.tm <- tm_shape(nga1) +
+     tm_polygons("inla.risk.resid1", style = "fixed", breaks = risk_brks)#, palette = '-viridis')
+
+   tmb.unstr.resid1.tm <- tm_shape(nga1) +
+     tm_polygons("tmb.unstr.resid1", style = "fixed", breaks = unstr_brks)
+   tmb.struc.resid1.tm <- tm_shape(nga1) +
+     tm_polygons("tmb.struc.resid1", style = "fixed", breaks = struc_brks)
+   tmb.total.resid1.tm <- tm_shape(nga1) +
+     tm_polygons("tmb.total.resid1", style = "fixed", breaks = total_brks)
+   tmb.risk.resid1.tm <- tm_shape(nga1) +
+     tm_polygons("tmb.risk.resid1", style = "fixed", breaks = risk_brks)#, palette = '-viridis')
+
+   tmap_arrange(unstr.sim1.tm, inla.unstr.resid1.tm, tmb.unstr.resid1.tm,
+                struc.sim1.tm, inla.struc.resid1.tm, tmb.struc.resid1.tm,
+                total.sim1.tm, inla.total.resid1.tm, tmb.total.resid1.tm,
+                risk.sim1.tm, inla.risk.resid1.tm, tmb.risk.resid1.tm,
+                ncol = 3)
+
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/inla_and_tmb_resids.png}
+\end{center}
+
+
+\subsubsection{Scatterplot of mean residuals}
+\label{sec:org6826d15}
+\begin{minted}[]{r}
+   par(mfrow = c(2, 2))
+
+   plot(nga1$inla.unstr.resid1, nga1$tmb.unstr.resid1, col=1:length(nga1$inla.unstr.resid1), pch = "",
+        main = 'Unstructured', xlab = 'INLA resid', ylab = 'TMB resid')
+   text(nga1$inla.unstr.resid1, nga1$tmb.unstr.resid1,
+        col=1:length(nga1$inla.unstr.resid1), label = as.character(1:37))
+   abline(a = 0, b = 1, col = 2)
+
+   plot(nga1$inla.struc.resid1, nga1$tmb.struc.resid1, col=1:length(nga1$inla.struc.resid1), pch = "",
+        main = 'Structured', xlab = 'INLA resid', ylab = 'TMB resid')
+   text(nga1$inla.struc.resid1, nga1$tmb.struc.resid1,
+        col=1:length(nga1$inla.struc.resid1), label = as.character(1:37))
+   abline(a = 0, b = 1, col = 2)
+
+   plot(nga1$inla.total.resid1, nga1$tmb.total.resid1, , col=1:length(nga1$inla.total.resid1), pch = "",
+        main = 'Total', xlab = 'INLA resid', ylab = 'TMB resid')
+   text(nga1$inla.total.resid1, nga1$tmb.total.resid1,
+        col=1:length(nga1$inla.total.resid1), label = as.character(1:37))
+   abline(a = 0, b = 1, col = 2)
+
+   plot(nga1$inla.risk.resid1, nga1$tmb.risk.resid1, col=1:length(nga1$inla.risk.resid1), pch = "",
+        main = 'Risk', xlab = 'INLA resid', ylab = 'TMB resid')
+   text(nga1$inla.risk.resid1, nga1$tmb.risk.resid1,
+        col=1:length(nga1$inla.risk.resid1), label = as.character(1:37))
+   abline(a = 0, b = 1, col = 2)
+
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/inla_and_tmb_resids_scatter.png}
+\end{center}
+
+
+\subsubsection{Plot comparing standard deviation estimates}
+\label{sec:orgdb34423}
+\begin{minted}[]{r}
+    # we only plot total and struc since they are readily available
+
+    nga1$tmb.struc.sd1 <- tmb.bym2.struc$sd
+    nga1$tmb.total.sd1 <- tmb.bym2.total$sd
+
+    nga1$inla.struc.sd1 <- inla.bym2.struc$sd
+    nga1$inla.total.sd1 <- inla.bym2.total$sd
+
+    struc_brks <- seq(min(c(nga1$tmb.struc.sd1, nga1$inla.struc.sd1)),
+                      max(c(nga1$tmb.struc.sd1, nga1$inla.struc.sd1)), length = 6)
+    total_brks <- seq(min(c(nga1$tmb.total.sd1, nga1$inla.total.sd1)),
+                      max(c(nga1$tmb.total.sd1, nga1$inla.total.sd1)), length = 6)
+
+    inla.struc.sd1.tm <- tm_shape(nga1) +
+      tm_polygons("inla.struc.sd1", style = "fixed", breaks = struc_brks)
+    inla.total.sd1.tm <- tm_shape(nga1) +
+      tm_polygons("inla.total.sd1", style = "fixed", breaks = total_brks)
+
+    tmb.struc.sd1.tm <- tm_shape(nga1) +
+      tm_polygons("tmb.struc.sd1", style = "fixed", breaks = struc_brks)
+    tmb.total.sd1.tm <- tm_shape(nga1) +
+      tm_polygons("tmb.total.sd1", style = "fixed", breaks = total_brks)
+
+    tmap_arrange(inla.struc.sd1.tm, inla.total.sd1.tm,
+                 tmb.struc.sd1.tm, tmb.total.sd1.tm, ncol = 2)
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/inla_and_tmb_sd_results.png}
+\end{center}
+
+
+\subsubsection{Scatterplot of standard deviation estimates}
+\label{sec:orge723902}
+\begin{minted}[]{r}
+   par(mfrow = c(1, 2))
+
+   plot(nga1$inla.struc.sd1, nga1$tmb.struc.sd1,
+        main = 'Structured', xlab = 'INLA sd', ylab = 'TMB sd')
+   text(nga1$inla.struc.sd1, nga1$tmb.struc.sd1,
+        col = 1:37, label = 1:37)
+   abline(a = 0, b = 1, col = 2)
+
+   plot(nga1$inla.total.sd1, nga1$tmb.total.sd1,
+        main = 'Total', xlab = 'INLA sd', ylab = 'TMB sd')
+   text(nga1$inla.total.sd1, nga1$tmb.total.sd1,
+        col = 1:37, label = 1:37)
+   abline(a = 0, b = 1, col = 2)
+
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/inla_and_tmb_stdev_scatter.png}
+\end{center}
+
+\subsubsection{Plot comparison of hyperparameter estimates}
+\label{sec:org1d1d2e8}
+\begin{minted}[]{r}
+    # get draws of the hypeparameters
+
+    params <- c('alpha', "phi", "tau")
+
+    par(mfrow = c(1, length(params)))
+
+    for(param in params){
+
+      true.val <- get(param)
+
+      # use INLA name to pull out INLA prior
+      prior.inla.name <- list(alpha = 'alpha', phi = "phi", tau = "prec")
+
+      if(param %in% names(priors)){
+        prior.params <- priors[[ prior.inla.name[[param]] ]]$params
+      }else if(param %in% names(hyper_priors)){
+        prior.params <- hyper_priors[[ prior.inla.name[[param]] ]]$params
+      }
+
+      if(param == "alpha"){
+
+        # prior in phi space
+        prior.draws <- rnorm(ndraws, prior.params[1], 1/sqrt(prior.params[2]))
+
+        # tmb draws
+        tmb.post.draws  <- alpha_tmb_draws
+
+        # get the INLA approximate marginal
+        inla.post.dist  <- inla.bym2$marginals.fixed[['(Intercept)']]
+
+      }
+
+      if(param == "phi"){
+
+        # prior in phi space
+        prior.draws <- rbeta(ndraws, prior.params[1], prior.params[2])
+
+        # tmb draws
+        tmb.post.draws  <- phi_tmb_draws
+
+        # get the INLA approximate marginal
+        inla.post.dist  <- inla.bym2$marginals.hyperpar[['Phi for region']]
+
+      }
+
+      if(param == "tau"){
+
+        # truncated normal prior on stdev
+        prior.draws <- rnorm(ndraws, prior.params[1], prior.params[2])
+        prior.draws <- prior.draws[-which(prior.draws < 0)]
+        # transform to prec
+        prior.draws <- 1 / (prior.draws ^ 2)
+
+        # tmb draws
+        tmb.post.draws  <- tau_tmb_draws
+
+        # get the INLA approximate marginal
+        inla.post.dist  <- inla.bym2$marginals.hyperpar[['Precision for region']]
+
+      }
+
+
+
+      ## to sample from the approximate posterior, we need to get the
+      ## discrete probabilities for each x-value. we do this by assuming
+      ## an approximate rectangle
+
+      inla.post.dist.widths <- diff(inla.post.dist[,1])
+      inla.post.dist.widths <- c(inla.post.dist.widths[1] / 2,
+      (inla.post.dist.widths[-length(inla.post.dist.widths)] + inla.post.dist.widths[-1])/2,
+      inla.post.dist.widths[length(inla.post.dist.widths)]/2)
+      inla.post.dist.probs <- inla.post.dist.widths * inla.post.dist[,2] ## width * pdf heigh approx= prob
+      # drop NaNs, and Infs
+      inla.post <- cbind(inla.post.dist[,1], inla.post.dist.widths, inla.post.dist.probs)
+      inla.post <- na.omit(inla.post)
+      inf.ind   <- unique(c(which(inla.post[,1]==Inf), which(inla.post[,2]==Inf),  which(inla.post[,3]==Inf)))
+      if(length(inf.ind) > 0){
+        inla.post.dist.x      <- inla.post[-inf.ind, 1]
+        inla.post.dist.widths <- inla.post[-inf.ind, 2]
+        inla.post.dist.probs  <- inla.post[-inf.ind, 3]
+      }else{
+        inla.post.dist.x      <- inla.post[, 1]
+        inla.post.dist.widths <- inla.post[, 2]
+        inla.post.dist.probs  <- inla.post[, 3]
+      }
+      ## rarely, the inla posterior dist is a point mass (eg pc.prec posterior has point mass at Tau=Inf!)
+      if(sum(inla.post.dist.probs)==0){
+        inla.post.draws <- sample(x=inla.post.dist[,1], size=ndraws, replace=TRUE, prob=inla.post.dist[,2])
+      }else{
+        inla.post.draws <- sample(x=inla.post.dist.x, size=ndraws, replace=TRUE, prob=inla.post.dist.probs)
+      }
+      ## get a safe range for plotting, and get the prior
+      xlim <- stats::quantile(c(tmb.post.draws, inla.post.draws, true.val),
+                              probs=c(.0001, .9999)) ## avoid crazy extremes
+                              if(xlim[1] == -Inf) xlim[1] <- -1000; if(xlim[2] == +Inf) xlim[2] <- +1000
+
+                              if(param == "phi") xlim <- c(0, 1)
+
+                              # find the posterior medians
+                              tmb.post.median  <- median(tmb.post.draws)
+                              inla.post.median <- median(inla.post.draws)
+
+
+                              # make the plot
+
+                              ## get posterior samples (we'll use density curves)
+                              prior.dens <- density(prior.draws)
+                              tmb.dens <- density(tmb.post.draws)
+                              inla.dens <- density(inla.post.draws)
+                              xrange <- xlim
+                              yrange <- range(c(prior.dens$y, tmb.dens$y, inla.dens$y))
+
+                              prior.col <- "black"
+                              tmb.col   <- "red"
+                              inla.col  <- "blue"
+
+                              ## setup plot and plot prior
+                              plot(prior.dens$x, prior.dens$y, pch = ".", col = prior.col, main = param,
+                                   xlim = xrange, ylim = yrange, xlab = param)
+                              lines(prior.dens$x, prior.dens$y, col = prior.col)
+
+                              ## plot tmb post and data
+                              lines(tmb.dens$x,tmb.dens$y, col = tmb.col)
+                              points(tmb.post.draws, rep(0, ndraws), col = alpha(tmb.col, 0.1), cex = 2, pch = '|')
+                              abline(v = tmb.post.median, col = tmb.col, lwd = 2)
+
+                              ## plot inla post and data
+                              lines(inla.dens$x,inla.dens$y, col = inla.col)
+                              points(inla.post.draws, rep(0, ndraws), col = alpha(inla.col, 0.1), cex = 2, pch = '|')
+                              abline(v = inla.post.median, col = inla.col, lwd = 2)
+
+                              ## plot truth
+                              abline(v = true.val, col = prior.col, lwd = 2)
+
+                              ## add legend
+                              legend(ifelse(param %in% c("tau"), "topright", "topleft"),
+                                     legend = c("prior & truth", "tmb", "inla"),
+                                     col = c(prior.col, tmb.col, inla.col), lwd = rep(2, 3))
+    }
+\end{minted}
+
+\begin{center}
+\includegraphics[width=.9\linewidth]{img/inla_and_tmb_hypers.png}
+\end{center}
+
+
+\section{Appendix}
+\label{sec:orge61d80e}
+\subsection{code to simulate unstruct + struct parts separately}
+\label{sec:orgf3102e3}
+\begin{minted}[]{r}
+
+   ## Simulate a BYM2 RV, sampling the unstructured and structured
+   ## components separately - and constraining them separately to sum to
+   ## zero
+   #
+   # tau: total precision
+   # phi: proportion of total that is structured
+   # *.mu: mean vec for *
+   # struct.prec: scaled precision matrix of bym2
+   # n.sims: numer of draws
+   # sumtozero: logical, if T, modify draws to sum-to-zero both the total
+   # and the structured components
+   #
+   # returns a matrix of draws (columns) across the dimension of the RV (rows)
+   rbym2_prec <- function(tau, phi,
+                          struct.mu = 0, unstruct.mu = 0,
+                          struct.prec, n.sims, sumtozero = FALSE) {
+
+     if(length(struct.mu) == 1){
+       struct.mu <- rep(struct.mu, nrow(struct.prec))
+     }
+     if(length(unstruct.mu) == 1){
+       unstruct.mu <- rep(unstruct.mu, nrow(struct.prec))
+     }
+
+     unstruct <- rmvnorm_prec(mu = unstruct.mu, prec = Diagonal(n = nrow(struct.prec), x = 1),
+                              n.sims = n.sims, sumtozero = sumtozero)
+     struct   <- rmvnorm_prec(mu = struct.mu, prec = struct.prec,
+                              n.sims = n.sims, sumtozero = sumtozero)
+
+     # combine (appropriately) into total followed by vector of struct
+     total <- 1 / sqrt(tau) * (sqrt(1 - phi) * unstruct + sqrt(phi) * struct)
+     return(rbind(total, struct))
+
+   }
+
+   # bym2.sims <- rbym2_prec(tau = tau, phi = phi, struct.prec =
+   #                         bym2.scaled.prec, n.sims = 4, sumtozero = T)
+
+\end{minted}
+
+\subsection{Function to simulate from joint total + struct with dual constraints}
+\label{sec:orgee20366}
+Alright, now we write a function that simulates from the joint BYM2
+conditional on sum-to-zero constraints for the structured
+components.\\
+
+I could NOT get this to work, and I'm still not sure why. That
+said, we don't actually want to constrain the usntructured
+component to sum-to-zero so it doesn't really matter. This was
+side-thought that I wanted to try out. Oh well.
+
+\begin{minted}[]{r}
+   ## Simulate a BYM2 RV, sampling simultaneously the total (unstruct +
+   ## struct) and the structured components
+   #
+   # mu: mean vec
+
+   # prec: joint precision matrix of bym2 (first block is unstructured,
+   #    second block is structured)
+   # n.sims: numer of draws
+   # sumtozero: logical, if T, modify draws to sum-to-zero both the total
+   #    and the structured components
+
+   # returns a matrix of draws (columns) across the dimension of the RV# (rows)
+   rbym2_simul_prec <- function(mu, prec, n.sims, sumtozero = FALSE) {
+
+     if(length(mu) == 1){
+       mu <- rep(mu, nrow(prec))
+     }
+
+     x <- rmvnorm_prec(mu = mu, prec = prec, n.sims = n.sims, sumtozero = sumtozero)
+
+     if(!sumtozero){
+
+       return(x)
+
+     }else{
+
+       # we need to adjust each draw to constrain it s.t.
+       # Ax.c = e
+       # (efficiently) make some relevant objects
+
+       A <- matrix(c(rep(1:0, each = nrow(prec) / 2),
+                     rep(0:1, each = nrow(prec) / 2)),
+                   nrow = 2, byrow = T)
+       e <- matrix(rep(0, 2), ncol = 1)
+
+       Qinv.A <- Matrix::solve(prec, t(A))
+
+       # this is how we do it for 1 draw
+       app.constr <- function(x){
+         x - Qinv.A %*% ((A %*% Qinv.A) ^ (-1)) %*% (A %*% x - e)
+       }
+
+       if(n.sims == 1){
+         x.c <- app.constr(x)
+       }else{
+         x.c <- do.call("cbind", apply(x, 2, app.constr))
+       }
+
+       return(list(x = x, x.c = x.c))
+
+     } # else(!sumtozero)
+
+   }
+
+   #+ END_SRC
+
+   #+BEGIN_SRC R :results output
+
+   # now we make the joint bym2 precision, to take some joint draws
+   bym2.joint.prec <- make_BYM2_joint_unstruct_scaled_struc_prec_mat(adj.mat = adj.mat,
+                                                                     phi = phi,
+                                                                     tau = tau,
+                                                                     sparse.mat = TRUE)
+
+   # and sample under constraints
+   bym2.sims <- rbym2_simul_prec(mu = 0,
+                                 prec = bym2.joint.prec,
+                                 n.sims = 4,
+                                 sumtozero = TRUE)
+
+   # pull out the raw (unconstrained) draws to look at them contrasted against the constrained
+   x   <- bym2.sims[['x']]
+   x.c <- bym2.sims[['x.c']]
+
+   total.uc <- x[1:37, ]
+   struct.uc <- x[38:74, ]
+   unstruct.uc  <- (sqrt(tau) * total.uc - sqrt(phi) * struct.uc) / sqrt(1 - phi)
+
+   total.c <- x.c[1:37, ]
+   struct.c <- x.c[38:74, ]
+   unstruct.c  <- (sqrt(tau) * total.c - sqrt(phi) * struct.c) / sqrt(1 - phi)
+
+   glue("Here are the means of the unstruct components pre-constraining")
+   colMeans(unstruct.uc)
+   glue("Here are the means of the unstruct components post-constraining")
+   colMeans(unstruct.c)
+
+   glue("Here are the means of the structured components pre-constraining")
+   colMeans(x[38:74, ])
+   glue("Here are the means of the structured components post-constraining")
+   colMeans(x.c[38:74, ])
+\end{minted}
+
+\begin{verbatim}
+
+   Here are the means of the unstruct components pre-constraining
+
+   [1]  0.061531020  0.008360674 -0.100934410  0.102887141
+
+   Here are the means of the unstruct components post-constraining
+
+   [1]  0.061531019  0.008360674 -0.100934410  0.102887141
+
+   Here are the means of the structured components pre-constraining
+
+   [1] -0.007546134 -0.001025349  0.012378547 -0.012618029
+
+   Here are the means of the structured components post-constraining
+
+   [1] -0.029057994 -0.003948324  0.047666225 -0.048588402
+\end{verbatim}
+
+\subsection{{\bfseries\sffamily TODO} looking at the logitbeta and logtgaussian priors}
+\label{sec:org6c4f645}
+\begin{minted}[]{r}
+
+   dlogitbeta <- function(logit_p, a, b, give_log = 0){
+
+     part1 = log(gamma(a + b)) - log(gamma(a))  - log(gamma(b));
+     part2 = (a - 1) * (logit_p - log(1 + exp(logit_p)));
+     part3 = (b - 1) * log( 1 - exp(logit_p)/(1 + exp(logit_p)));
+     part4 =  logit_p - 2 * log( 1 + exp(logit_p));
+
+     logres = part1 + part2 + part3 + part4;
+
+     if(give_log){
+       return(logres);
+     }else{
+       return(exp(logres));
+     }
+
+   }
+
+   plot_dlogit_beta <- function(a, b){
+     x <- seq(-5, 5, by = 0.01)
+     par(mfrow = c(3, 1))
+     plot(plogis(x), dbeta(plogis(x), a, b), main = 'beta')
+     plot(x, dlogitbeta(x, a, b), main = 'logit_beta')
+     plot(plogis(x), dlogitbeta(x, a, b), main = 'scaled logit_beta')
+   }
+
+   plot_dlogit_beta(2, 2)
+   plot_dlogit_beta(.5, .5)
+   plot_dlogit_beta(2, 5)
+
+
+   dlogtgaussian <- function( log_prec,  u,  s, give_log=0){
+
+     part1 = -0.5 * log(8 * pi) - s;
+     part2 = -0.5 * (1 / s ^ 2) *  ((exp(-log_prec / 2) - u ) ^ 2) - log_prec / 2;
+
+     logres = part1 + part2;
+
+     if(give_log){
+       return(logres);
+     }else{
+       return(exp(logres));
+     }
+
+   }
+
+   plot_dlogtgaussian <- function(u, s, range_x = 5){
+     x <- seq(-range_x, range_x, by = 0.01)
+     par(mfrow = c(3, 1))
+     plot(1 / sqrt(exp(x)), dnorm(1 / sqrt(exp(x)), u, s) / .5, main = 'trunc norm stdev')
+     plot(x, dlogtgaussian(x, u, s), main = 'log prec')
+     plot(1 / sqrt(exp(x)), dlogtgaussian(x, u, s), main = 'scaled log prec')
+   }
+
+   plot_dlogtgaussian(0, 1)
+   plot_dlogtgaussian(3, 5, range_x = 10)
+   plot_dlogtgaussian(0, 10, range_x = 10)
+\end{minted}
+\end{document}
