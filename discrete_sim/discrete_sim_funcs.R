@@ -175,7 +175,7 @@ rbym2_simul_1constr_prec <- function(mu, prec, n.sims,
     mu <- rep(mu, nrow(prec))
   }
 
-  x <- rmvnorm_prec(mu = mu, prec = prec, n.sims = n.sims, sumtozero = sumtozero)
+  x <- rmvnorm_prec(mu = mu, prec = prec, n.sims = n.sims, sumtozero = FALSE)
 
   if(!sumtozero){
 
